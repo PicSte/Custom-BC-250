@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${MOCK_STATE:?}"
+echo "Module                  Size  Used by"
+cat "$MOCK_STATE/lsmod" 2>/dev/null || true

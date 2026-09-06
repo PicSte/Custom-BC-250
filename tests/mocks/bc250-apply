@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${MOCK_STATE:?}"
+echo "bc250-apply $*" >>"$MOCK_STATE/calls"
+UNIT="${BC250_PREFIX}/etc/systemd/system/bc250-smu-oc.service"
+APPLIED="${BC250_PREFIX}/etc/bc250-smu-oc.conf"
+case ${1:-} in
+	--install|-i)
+		mkdir -p "$(dirname "$UNIT")" "$(dirname "$APPLIED")"
+		cp "$2" "$APPLIED"
+		printf '[Unit]\nDescription=mock oc\n[Service]\nExecStart=/bin/true\n' >"$UNIT" ;;
+	--uninstall|-u) rm -f "$UNIT" "$APPLIED" ;;
+esac

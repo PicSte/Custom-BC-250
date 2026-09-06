@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+: "${MOCK_STATE:?}"
+cat "$MOCK_STATE/vulkaninfo" 2>/dev/null || echo "num_cu = 24"

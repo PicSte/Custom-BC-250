@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Mock curl. Only file:// is served: a test that reaches the network is a bug
+# in the test, so it fails loudly instead of silently downloading something.
+set -euo pipefail
+out=''; url=''
+while (( $# )); do
+	case $1 in
+		-o) out=$2; shift ;;
+		--retry|--retry-delay) shift ;;
+		-*) ;;
+		*) url=$1 ;;
+	esac
+	shift
+done
+if [[ $url != file://* ]]; then
+	echo "curl mock: refusing network access to $url" >&2
+	exit 7
+fi
+src=${url#file://}
+[[ -n $out ]] || { cat "$src"; exit 0; }
+cp -- "$src" "$out"

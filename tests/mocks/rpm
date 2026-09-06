@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Mock rpm: only `rpm -q PKG` is used, and only for packages marked as booted.
+set -euo pipefail
+: "${MOCK_STATE:?}"
+[[ ${1:-} == -q ]] || exit 0
+grep -qxF "${2:-}" "$MOCK_STATE/rpm-installed" 2>/dev/null

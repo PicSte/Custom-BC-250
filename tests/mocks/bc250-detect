@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Mock calibration: writes the config the real tool would produce.
+set -euo pipefail
+: "${MOCK_STATE:?}"
+echo "bc250-detect $*" >>"$MOCK_STATE/calls"
+conf=''
+while (( $# )); do case $1 in -c) conf=$2; shift ;; esac; shift; done
+[[ -n $conf ]] || exit 2
+mkdir -p "$(dirname "$conf")"
+printf '[overclock]\nfrequency = 3700\nscale = -20\nmax_temp = 90\n' >"$conf"

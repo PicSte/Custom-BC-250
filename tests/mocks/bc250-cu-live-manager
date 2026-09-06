@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Mock of the upstream live manager: records calls and mimics the filesystem
+# side effects the real script has (boot table, boot service, umr install).
+set -euo pipefail
+: "${MOCK_STATE:?}"
+echo "lm $*" >>"$MOCK_STATE/calls"
+
+CONF="${BC250_PREFIX}/etc/bc250-cu-live-manager.conf"
+UNIT="${BC250_PREFIX}/etc/systemd/system/bc250-cu-live-manager.service"
+
+case ${1:-} in
+	install-umr)
+		if [[ -f $MOCK_STATE/umr-needs-reboot ]]; then exit 0; fi
+		printf '#!/bin/sh\nexit 0\n' >"$MOCK_STATE/bin/umr"; chmod +x "$MOCK_STATE/bin/umr" ;;
+	write-service-table)
+		mkdir -p "$(dirname "$CONF")"; echo "WGP_TABLE=all" >"$CONF" ;;
+	install-service)
+		mkdir -p "$(dirname "$UNIT")"
+		printf '[Unit]\nDescription=mock\n[Service]\nExecStart=/bin/true\n' >"$UNIT" ;;
+	uninstall-service) rm -f "$UNIT" "$CONF" ;;
+	cpu-unlock) echo "cpu-mask=0xFF" >>"$MOCK_STATE/smu" ;;
+	status) echo "mock dashboard" ;;
+esac
+exit 0

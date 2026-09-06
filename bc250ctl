@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+#
+# bc250ctl — one place to install, configure and verify the BC-250 tweaks.
+#
+# See docs/ for what each module does and README.md for the quick start.
+
+set -euo pipefail
+
+BC250_SELF=$(readlink -f -- "$0")
+BC250_ROOT=$(dirname -- "$BC250_SELF")
+
+: "${BC250_LIB_DIR:=$BC250_ROOT/lib}"
+: "${BC250_MODULES_DIR:=$BC250_ROOT/modules}"
+: "${BC250_PROFILES_DIR:=$BC250_ROOT/profiles}"
+: "${BC250_SOURCES_FILE:=$BC250_ROOT/sources.env}"
+
+for _lib in log core state systemd ostree download hw livemgr; do
+	# shellcheck source=/dev/null
+	source "$BC250_LIB_DIR/$_lib.sh"
+done
+# shellcheck source=/dev/null
+source "$BC250_SOURCES_FILE"
+
+RESUME_SERVICE='bc250ctl-resume.service'
+BOOTSTRAP_MAX_PASSES=4
+
+# ------------------------------------------------------------------ usage ---
+
+usage() {
+	cat <<'EOF'
+bc250ctl — BC-250 tweak manager for Bazzite
+
+Usage:
+  bc250ctl bootstrap [--profile NAME]   Set up a fresh install, resuming across reboots
+  bc250ctl status                       What is applied right now
+  bc250ctl modules                      List the available modules
+  bc250ctl install <module|all>         Install and configure a module
+  bc250ctl configure <module|all>       Re-apply configuration without reinstalling
+  bc250ctl verify <module|all>          Check that a module is really in effect
+  bc250ctl revert <module|all>          Put a module back to stock
+  bc250ctl doctor                       Hardware and environment report
+  bc250ctl sources [--check]            Show pinned upstreams, or check for updates
+  bc250ctl menu                         Interactive menu
+
+Options:
+  -p, --profile NAME   Profile to apply: safe, balanced, max
+  -n, --dry-run        Print what would happen, change nothing
+  -y, --yes            Do not ask for confirmation
+  -v, --verbose        More detail
+      --force          Continue even if no BC-250 is detected
+  -h, --help           This text
+
+Modules may be named in full (40-gpu-cu) or short (gpu-cu).
+
+Safety: this tool refuses a CPU core voltage above 1275 mV, and refuses
+1325 mV outright — past that the SoC is destroyed. A cold power cycle
+(pull the power, do not just reboot) resets the CU and core-count unlocks,
+so it is always available as an escape hatch.
+EOF
+}
+
+# ------------------------------------------------------------- utilities ---
+
+require_root() {
+	# With BC250_PREFIX set every path is redirected into a sandbox, so
+	# nothing system-wide can be touched and root is not needed. That is how
+	# the test suite drives the real code paths as an ordinary user.
+	[[ -n ${BC250_PREFIX:-} ]] && return 0
+	[[ ${EUID:-$(id -u)} -eq 0 ]] ||
+		die "this needs root: sudo bc250ctl $*"
+}
+
+# resolve_targets <target>... — module ids, in apply order.
+resolve_targets() {
+	local t id
+	if [[ $# -eq 0 || $1 == all ]]; then
+		module_ids
+		return 0
+	fi
+	for t in "$@"; do
+		id=$(module_resolve "$t") || die "unknown module: $t (try 'bc250ctl modules')"
+		printf '%s\n' "$id"
+	done
+}
+
+# targets_into <array-name> <target>...
+#
+# resolve_targets runs in a subshell, so its die() would otherwise be swallowed
+# and the caller would iterate an empty list and report success. Capturing
+# through a command substitution propagates the failure.
+targets_into() {
+	local -n _out=$1
+	shift
+	local list
+	list=$(resolve_targets "$@") || return 1
+	mapfile -t _out <<<"$list"
+}
+
+apply_profile() {
+	local name=$1
+	local file="$BC250_PROFILES_DIR/$name.env"
+	[[ -f $file ]] ||
+		die "unknown profile '$name'. Available: $(cd "$BC250_PROFILES_DIR" && printf '%s ' *.env | sed 's/\.env//g')"
+
+	log_info "applying profile '$name' to $BC250_CONFIG"
+	{
+		printf '# Written by bc250ctl from profiles/%s.env on %s.\n' "$name" "$(date -Is)"
+		printf '# Edit freely: bc250ctl reads this file, not the profile.\n\n'
+		grep -v '^# shellcheck' -- "$file"
+	} | write_file "$BC250_CONFIG" 0600
+
+	config_load "$BC250_CONFIG"
+	config_validate
+}
+
+# ------------------------------------------------------------- commands ----
+
+cmd_modules() {
+	local id
+	printf '%-14s %-11s %s\n' MODULE STAGE DESCRIPTION
+	for id in $(module_ids); do
+		printf '%-14s %-11s %s\n' \
+			"$(module_short "$id")" \
+			"$(module_call "$id" stage)" \
+			"$(module_call "$id" describe)"
+	done
+}
+
+cmd_status() {
+	local id short state
+
+	printf 'profile      %s\n' "${BC250_PROFILE}"
+	printf 'hardware     %s\n' \
+		"$(hw_is_bc250 && printf 'BC-250 detected (%s)' "$(hw_gpu_card || echo 'card unknown')" || printf 'no BC-250 found')"
+	printf 'cpu          %s cores online\n' "$(hw_cpu_cores)"
+	if reboot_is_required; then
+		printf 'pending      %s\n' 'a reboot is needed to finish applying changes'
+	fi
+	if [[ -n $(state_get bootstrap.phase '') ]]; then
+		printf 'bootstrap    in progress, phase "%s"\n' "$(state_get bootstrap.phase)"
+	fi
+	printf '\n%-14s %-9s %s\n' MODULE APPLIED STATUS
+
+	for id in $(module_ids); do
+		short=$(module_short "$id")
+		if module_call "$id" detect >/dev/null 2>&1; then
+			state='yes'
+		else
+			state='no'
+		fi
+		[[ $(state_get "stale.$id" 0) == 1 ]] && state='stale'
+		printf '%-14s %-9s %s\n' "$short" "$state" "$(module_call "$id" status 2>/dev/null || echo '?')"
+	done
+
+	if [[ $(state_get 'stale.60-cpu-oc' 0) == 1 ]]; then
+		printf '\n'
+		log_warn "cpu-oc is stale: it was calibrated before the core count or GPU routing changed."
+	fi
+}
+
+cmd_install() {
+	require_root install "$@"
+	config_validate
+
+	local -a targets
+	targets_into targets "$@" || return 1
+
+	local id
+	for id in "${targets[@]}"; do
+		log_step "$(module_short "$id"): $(module_call "$id" describe)"
+		module_check_requires "$id"
+		module_call "$id" install
+		module_invalidate "$id"
+		state_set "applied.$id" "$(date -Is)"
+	done
+}
+
+cmd_configure() {
+	require_root configure "$@"
+	config_validate
+
+	local -a targets
+	targets_into targets "$@" || return 1
+
+	local id
+	for id in "${targets[@]}"; do
+		log_step "$(module_short "$id"): re-applying configuration"
+		module_call "$id" configure
+	done
+}
+
+cmd_verify() {
+	config_validate
+
+	local -a targets
+	targets_into targets "$@" || return 1
+
+	local id rc=0
+	for id in "${targets[@]}"; do
+		log_step "$(module_short "$id")"
+		module_call "$id" verify || { rc=1; log_error "$(module_short "$id") did not verify"; }
+	done
+	if (( rc == 0 )); then
+		log_ok "everything checked out"
+	fi
+	return "$rc"
+}
+
+cmd_revert() {
+	require_root revert "$@"
+
+	# Revert in reverse apply order, so dependants come down first.
+	local -a targets
+	targets_into targets "$@" || return 1
+	mapfile -t targets < <(printf '%s\n' "${targets[@]}" | tac)
+	local id
+
+	confirm "Revert ${#targets[@]} module(s) to stock?" || { log_info "cancelled"; return 0; }
+
+	for id in "${targets[@]}"; do
+		log_step "$(module_short "$id"): reverting"
+		module_call "$id" uninstall || log_warn "$(module_short "$id") did not revert cleanly"
+		state_del "applied.$id"
+		state_del "stale.$id"
+	done
+}
+
+# ------------------------------------------------------------ bootstrap ----
+
+_install_resume_unit() {
+	unit_install "$RESUME_SERVICE" <<-EOC
+		[Unit]
+		Description=bc250ctl — finish the bootstrap after a reboot
+		After=multi-user.target
+		ConditionPathExists=${BC250_VAR}/state
+
+		[Service]
+		Type=oneshot
+		ExecStart=${BC250_SELF} --yes resume
+
+		[Install]
+		WantedBy=multi-user.target
+	EOC
+	bc_run systemctl enable "$RESUME_SERVICE" >/dev/null 2>&1 || true
+}
+
+_remove_resume_unit() { unit_remove "$RESUME_SERVICE"; }
+
+# _run_stage <stage> [unattended]
+#
+# Every module in the stage is run, even one that already looks applied:
+# installs are idempotent, and a module that was interrupted by a reboot (the
+# governor gets layered in one pass and configured in the next) only finishes
+# because it is run again.
+_run_stage() {
+	local stage=$1 unattended=${2:-0} id
+	for id in $(module_ids); do
+		[[ $(module_call "$id" stage) == "$stage" ]] || continue
+
+		# Defer only a module that both needs work and cannot do it without
+		# someone at the keyboard.
+		if [[ $unattended == 1 ]] &&
+		   ! module_call "$id" unattended &&
+		   ! module_call "$id" detect >/dev/null 2>&1; then
+			log_warn "skipping $(module_short "$id"): it needs a person present." \
+			         "Run: sudo bc250ctl install $(module_short "$id")"
+			state_set "deferred.$id" 1
+			continue
+		fi
+
+		log_step "$(module_short "$id"): $(module_call "$id" describe)"
+		module_check_requires "$id"
+		module_call "$id" install
+		module_invalidate "$id"
+		state_set "applied.$id" "$(date -Is)"
+	done
+}
+
+_bootstrap_finish() {
+	state_del bootstrap.phase
+	state_del bootstrap.passes
+	_remove_resume_unit
+	log_step "bootstrap complete"
+	cmd_verify all || log_warn "some checks did not pass; see above"
+
+	local id deferred=()
+	for id in $(state_keys 'deferred.'); do
+		id=${id#deferred.}
+		deferred+=("$(module_short "$id")")
+	done
+	if (( ${#deferred[@]} > 0 )); then
+		log_warn "left for you to run by hand: ${deferred[*]}"
+	fi
+}
+
+_bootstrap_pause_for_reboot() {
+	_install_resume_unit
+	log_step "a reboot is needed before the rest can be applied"
+	log_info "run: systemctl reboot"
+	log_info "bc250ctl will pick up where it left off automatically."
+}
+
+cmd_bootstrap() {
+	require_root bootstrap "$@"
+	ostree_require_atomic
+
+	local passes
+	passes=$(state_get bootstrap.passes 0)
+	passes=$(( passes + 1 ))
+	if (( passes > BOOTSTRAP_MAX_PASSES )); then
+		state_del bootstrap.phase
+		state_del bootstrap.passes
+		_remove_resume_unit
+		die "bootstrap asked for a reboot $BOOTSTRAP_MAX_PASSES times without finishing." \
+		    "Stopping rather than looping. Run 'bc250ctl status' and continue module by module."
+	fi
+	state_set bootstrap.passes "$passes"
+
+	# Both stages run on every pass. The pre-reboot stage is idempotent, and
+	# re-running it is what lets a module that could only be half-applied
+	# before the reboot (layer the package now, configure it once it is
+	# booted) finish on the next pass.
+	state_set bootstrap.phase 'running'
+	reboot_clear
+
+	log_step "stage 1 of 2: kernel arguments, packages, drivers"
+	_run_stage 'pre-reboot' "${BC250_UNATTENDED:-0}"
+
+	if reboot_is_required; then
+		_bootstrap_pause_for_reboot
+		return 0
+	fi
+
+	log_step "stage 2 of 2: runtime configuration"
+	_run_stage 'runtime' "${BC250_UNATTENDED:-0}"
+
+	if reboot_is_required; then
+		_bootstrap_pause_for_reboot
+		return 0
+	fi
+
+	_bootstrap_finish
+}
+
+cmd_resume() {
+	require_root resume
+	[[ -n $(state_get bootstrap.phase '') ]] || { log_info "no bootstrap in progress"; return 0; }
+	BC250_UNATTENDED=1
+	BC250_ASSUME_YES=1
+	log_step "resuming the bootstrap after reboot"
+	cmd_bootstrap
+}
+
+# --------------------------------------------------------------- doctor ----
+
+cmd_doctor() {
+	printf 'bc250ctl        %s\n' "$BC250_SELF"
+	printf 'prefix          %s\n' "${BC250_PREFIX:-/}"
+	printf 'config          %s\n' "$([[ -f $BC250_CONFIG ]] && echo "$BC250_CONFIG" || echo 'not written yet')"
+	printf 'profile         %s\n' "$BC250_PROFILE"
+	printf '\n'
+
+	printf 'rpm-ostree      %s\n' "$(ostree_is_atomic && echo present || echo 'MISSING — this tool targets Bazzite')"
+	printf 'kernel          %s\n' "$(uname -r)"
+	printf 'umr             %s\n' "$(hw_has_umr && command -v umr || echo 'not installed')"
+	printf 'python3         %s\n' "$(command -v python3 || echo 'not installed')"
+	printf 'vulkaninfo      %s\n' "$(command -v vulkaninfo || echo 'not installed')"
+	printf 'stress          %s\n' "$(command -v stress || echo 'not installed')"
+	printf '\n'
+
+	if hw_is_bc250; then
+		printf 'BC-250 GPU      %s at %s\n' "$(hw_gpu_card || echo '?')" "$(hw_gpu_pci_addr)"
+	else
+		printf 'BC-250 GPU      NOT FOUND (looked for PCI 1002:13fe)\n'
+	fi
+	printf 'CPU cores       %s\n' "$(hw_cpu_cores)"
+
+	local sclk card
+	if card=$(hw_gpu_card) && [[ -r ${SYSFS_DRM}/${card}/device/pp_dpm_sclk ]]; then
+		sclk="${SYSFS_DRM}/${card}/device/pp_dpm_sclk"
+		printf '\nGPU clock table:\n'
+		sed 's/^/  /' -- "$sclk"
+	fi
+
+	if reboot_is_required; then
+		printf '\nA reboot is pending.\n'
+	fi
+}
+
+# -------------------------------------------------------------- sources ----
+
+cmd_sources() {
+	local check=0
+	[[ ${1:-} == --check ]] && check=1
+
+	local name repo ref latest
+	for name in CU_LIVE_MANAGER SMU_OC; do
+		repo=$(src_get "$name" REPO)
+		ref=$(src_get "$name" REF)
+		printf '%-18s %s\n' "$name" "$repo"
+		printf '%-18s pinned at %s\n' '' "$ref"
+
+		if (( check )); then
+			latest=$(git ls-remote "$repo" HEAD 2>/dev/null | cut -f1) || latest=''
+			if [[ -z $latest ]]; then
+				printf '%-18s could not reach the remote\n' ''
+			elif [[ $latest == "$ref" ]]; then
+				printf '%-18s up to date\n' ''
+			else
+				printf '%-18s UPDATE AVAILABLE: %s\n' '' "$latest"
+				printf '%-18s review the diff, then edit sources.env (and the sha256 for file pins)\n' ''
+			fi
+		fi
+		printf '\n'
+	done
+}
+
+# ----------------------------------------------------------------- menu ----
+
+cmd_menu() {
+	local choice ids id i
+	mapfile -t ids < <(module_ids)
+
+	while true; do
+		ui_title "bc250ctl — profile $BC250_PROFILE"
+		printf '  1) status\n'
+		printf '  2) bootstrap this machine\n'
+		printf '  3) install a module\n'
+		printf '  4) verify everything\n'
+		printf '  5) revert a module\n'
+		printf '  6) doctor\n'
+		printf '  q) quit\n\n'
+		read -r -p 'choice: ' choice
+
+		case $choice in
+			1) cmd_status ;;
+			2) cmd_bootstrap ;;
+			3|5)
+				printf '\n'
+				for i in "${!ids[@]}"; do
+					printf '  %d) %-14s %s\n' $((i + 1)) \
+						"$(module_short "${ids[$i]}")" "$(module_call "${ids[$i]}" describe)"
+				done
+				printf '\n'
+				read -r -p 'module number: ' i
+				if ! [[ $i =~ ^[0-9]+$ ]] || (( i < 1 || i > ${#ids[@]} )); then
+					log_warn 'not a module'
+					continue
+				fi
+				id=$(module_short "${ids[$((i - 1))]}")
+				if [[ $choice == 3 ]]; then
+					cmd_install "$id"
+				else
+					cmd_revert "$id"
+				fi
+				;;
+			4) cmd_verify all || true ;;
+			6) cmd_doctor ;;
+			q|Q) return 0 ;;
+			*) log_warn 'no such choice' ;;
+		esac
+	done
+}
+
+# ----------------------------------------------------------------- main ----
+
+main() {
+	local profile='' command=''
+
+	while (( $# )); do
+		case $1 in
+			-n|--dry-run) BC250_DRY_RUN=1 ;;
+			-y|--yes)     BC250_ASSUME_YES=1 ;;
+			-v|--verbose) BC250_VERBOSE=1 ;;
+			--force)      BC250_FORCE=1 ;;
+			-p|--profile) profile=${2:?--profile needs a name}; shift ;;
+			--profile=*)  profile=${1#*=} ;;
+			-h|--help)    usage; return 0 ;;
+			--)           shift; break ;;
+			-*)           die "unknown option: $1 (try --help)" ;;
+			*)            command=$1; shift; break ;;
+		esac
+		shift
+	done
+
+	export BC250_DRY_RUN BC250_ASSUME_YES BC250_VERBOSE BC250_FORCE
+
+	config_load
+
+	if [[ -n $profile ]]; then
+		require_root "${command:-bootstrap}"
+		apply_profile "$profile"
+	fi
+
+	case ${command:-} in
+		''|help)    usage ;;
+		bootstrap)  cmd_bootstrap "$@" ;;
+		resume)     cmd_resume ;;
+		status)     cmd_status ;;
+		modules)    cmd_modules ;;
+		install)    cmd_install "$@" ;;
+		configure)  cmd_configure "$@" ;;
+		verify)     cmd_verify "$@" ;;
+		revert)     cmd_revert "$@" ;;
+		doctor)     cmd_doctor ;;
+		sources)    cmd_sources "$@" ;;
+		menu|tui)   cmd_menu ;;
+		*)          die "unknown command: $command (try --help)" ;;
+	esac
+}
+
+main "$@"

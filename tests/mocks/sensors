@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "nct6683-isa-0a20"
+echo "SYSTIN:        +42.0°C"

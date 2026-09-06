@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${MOCK_STATE:?}"
+echo "modprobe $*" >>"$MOCK_STATE/calls"
+if [[ ${1:-} == -r ]]; then
+	grep -v "^${2} " "$MOCK_STATE/lsmod" >"$MOCK_STATE/lsmod.tmp" 2>/dev/null || true
+	mv "$MOCK_STATE/lsmod.tmp" "$MOCK_STATE/lsmod" 2>/dev/null || true
+	exit 0
+fi
+[[ -f $MOCK_STATE/modprobe-fails ]] && exit 1
+grep -q "^${1} " "$MOCK_STATE/lsmod" 2>/dev/null || echo "${1}                 16384  0" >>"$MOCK_STATE/lsmod"

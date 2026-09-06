@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Mock systemctl backed by $MOCK_STATE and the sandboxed unit directory.
+set -euo pipefail
+: "${MOCK_STATE:?}"
+UNITS="${BC250_PREFIX}/etc/systemd/system"
+ENABLED="$MOCK_STATE/units-enabled"; ACTIVE="$MOCK_STATE/units-active"; MASKED="$MOCK_STATE/units-masked"
+touch "$ENABLED" "$ACTIVE" "$MASKED"
+echo "systemctl $*" >>"$MOCK_STATE/calls"
+
+add() { grep -qxF "$2" "$1" || echo "$2" >>"$1"; }
+del() { grep -vxF "$2" "$1" >"$1.tmp" 2>/dev/null || true; mv "$1.tmp" "$1"; }
+
+cmd=${1:-}; shift || true
+args=()
+for a in "$@"; do [[ $a == --* ]] || args+=("$a"); done
+unit=${args[0]:-}
+
+case $cmd in
+	daemon-reload) ;;
+	enable)  add "$ENABLED" "$unit"; [[ " $* " == *" --now "* ]] && add "$ACTIVE" "$unit" ;;
+	disable) del "$ENABLED" "$unit"; del "$ACTIVE" "$unit" ;;
+	mask)    add "$MASKED" "$unit"; del "$ENABLED" "$unit"; del "$ACTIVE" "$unit" ;;
+	unmask)  del "$MASKED" "$unit" ;;
+	start)   add "$ACTIVE" "$unit" ;;
+	stop)    del "$ACTIVE" "$unit" ;;
+	is-active)  grep -qxF "$unit" "$ACTIVE" ;;
+	is-enabled)
+		if grep -qxF "$unit" "$MASKED"; then echo masked; exit 0; fi
+		grep -qxF "$unit" "$ENABLED" ;;
+	cat) [[ -f "$UNITS/$unit" ]] && cat "$UNITS/$unit" ;;
+	list-unit-files) cat "$MOCK_STATE/unit-files" 2>/dev/null || true ;;
+	reboot) echo "REBOOT" >>"$MOCK_STATE/calls" ;;
+	*) ;;
+esac

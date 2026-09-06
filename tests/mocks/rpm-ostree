@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Mock rpm-ostree: kargs and package layering, backed by files under $MOCK_STATE.
+set -euo pipefail
+: "${MOCK_STATE:?MOCK_STATE must be set}"
+KARGS="$MOCK_STATE/kargs"; LAYERED="$MOCK_STATE/layered"
+touch "$KARGS" "$LAYERED"
+echo "rpm-ostree $*" >>"$MOCK_STATE/calls"
+
+case ${1:-} in
+	kargs)
+		shift
+		if (( $# == 0 )); then tr '\n' ' ' <"$KARGS"; echo; exit 0; fi
+		for arg; do
+			case $arg in
+				--append-if-missing=*)
+					k=${arg#*=}; grep -qxF "$k" "$KARGS" || echo "$k" >>"$KARGS" ;;
+				--delete-if-present=*)
+					k=${arg#*=}; grep -vxF "$k" "$KARGS" >"$KARGS.tmp" || true; mv "$KARGS.tmp" "$KARGS" ;;
+			esac
+		done
+		;;
+	install)
+		shift
+		for arg; do [[ $arg == -* ]] && continue; grep -qxF "$arg" "$LAYERED" || echo "$arg" >>"$LAYERED"; done
+		;;
+	uninstall)
+		shift
+		for arg; do grep -vxF "$arg" "$LAYERED" >"$LAYERED.tmp" || true; mv "$LAYERED.tmp" "$LAYERED"; done
+		;;
+	status)
+		echo "State: idle"
+		echo "  LayeredPackages: $(tr '\n' ' ' <"$LAYERED")"
+		;;
+	*) exit 0 ;;
+esac

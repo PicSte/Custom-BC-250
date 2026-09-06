@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      # Ubuntu ships a bats too old for BATS_TEST_TMPDIR (needs >= 1.4).
+      - name: Install bats-core
+        run: |
+          git clone --depth 1 --branch v1.11.0 https://github.com/bats-core/bats-core /tmp/bats-core
+          sudo /tmp/bats-core/install.sh /usr/local
+
+      - name: Lint
+        run: ./tests/lint.sh
+
+      # The suite runs against a sandbox prefix with mocked system commands,
+      # so no BC-250 and no root are needed.
+      - name: Test
+        run: bats tests/
