@@ -18,10 +18,19 @@
 CORES_SERVICE='bc250ctl-cpu-cores.service'
 
 mod_describe()    { printf 'CPU core unlock (6c/12t -> 8c/16t, SMU core mask)\n'; }
-mod_requires()    { :; }
-mod_invalidates() { printf '60-cpu-oc\n'; }   # an OC curve tuned on 6 cores is not valid on 8
+# Without the rebuilt SSDT tables, CPUs 12-15 come up with no idle states at
+# all and burn power doing nothing. The unlock is not worth having without it.
+mod_requires()    { printf '15-acpi\n'; }
+mod_conflicts()   { :; }
+# An OC curve tuned on 6 cores is not valid on 8. And pp_dpm_sclk starts
+# reporting nonsense once the extra cores are up, so the governor's own
+# verification has to be re-read with that in mind.
+mod_invalidates() { printf '60-cpu-oc\n30-governor\n'; }
 mod_stage()       { printf 'runtime\n'; }
 mod_unattended()  { return 0; }
+mod_risk()        { printf 'high\n'; }
+mod_needs_smu()   { return 0; }
+mod_upstream()    { src_get CU_LIVE_MANAGER REPO; }
 
 # Active when the core mask is re-armed at boot.
 mod_active() { unit_exists "$CORES_SERVICE"; }
@@ -73,7 +82,8 @@ mod_configure() {
 	lm_installed || die "bc250-cu-live-manager is not installed; bc_run 'bc250ctl install cpu-cores' first"
 
 	log_step "arming the SMU core mask"
-	lm_run cpu-unlock
+	# The governor drives the same PCI index/data window as this write.
+	smu_critical lm_run cpu-unlock
 
 	# Re-arm on every boot: the mask does not survive a cold power cycle.
 	unit_install "$CORES_SERVICE" <<-EOC

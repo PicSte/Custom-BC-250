@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+: "${MOCK_STATE:?}"
+echo "ujust $*" >>"$MOCK_STATE/calls"
+[[ -f $MOCK_STATE/ujust-fails ]] && exit 1
+exit 0

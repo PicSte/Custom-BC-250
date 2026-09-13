@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Mock cpupower. $MOCK_STATE/cpupower-idle and -freq hold the canned output;
+# by default every CPU reports zero idle states, i.e. the tables are missing.
+set -euo pipefail
+: "${MOCK_STATE:?}"
+case " $* " in
+	*" idle-info "*)
+		cat "$MOCK_STATE/cpupower-idle" 2>/dev/null || {
+			for i in $(seq 0 15); do
+				printf 'analyzing CPU %d:\nNumber of idle states: 0\n' "$i"
+			done
+		} ;;
+	*" frequency-info "*)
+		cat "$MOCK_STATE/cpupower-freq" 2>/dev/null || echo "no or unknown cpufreq driver" ;;
+esac

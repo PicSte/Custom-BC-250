@@ -70,7 +70,7 @@ setup() {
 @test "revert takes the modules back to stock" {
 	fake_bc250
 	use_profile balanced
-	bc250ctl install kargs sensors gpu-cu cpu-cores
+	bc250ctl install kargs acpi sensors gpu-cu cpu-cores
 
 	run bc250ctl revert all
 	[ "$status" -eq 0 ]

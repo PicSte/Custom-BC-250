@@ -49,6 +49,67 @@ Votre carte a probablement un WGP défectueux. Voir la section « Tester la sant
 de [`validation.md`](validation.md) : isolez-le, puis passez sa référence dans
 `BC250_GPU_WGP_LAYOUT` pour tourner en 38 ou 36 CU.
 
+## Les CPU 12-15 n'ont pas de C-state
+
+C'est le symptôme du déblocage des cœurs sans les tables ACPI reconstruites : quatre
+threads qui ne peuvent jamais descendre en veille et consomment à vide.
+
+```sh
+cpupower -c all idle-info | grep -c 'Number of idle states: 0'   # doit valoir 0
+sudo bc250ctl verify acpi
+```
+
+Si le compte n'est pas nul :
+
+```sh
+sudo bc250ctl install acpi
+sudo systemctl reboot
+```
+
+Si ça persiste après redémarrage, GRUB ne charge pas l'archive :
+
+```sh
+grep GRUB_EARLY_INITRD /etc/default/grub     # la ligne doit être là
+ls -l /boot/SSDT_ACPI.cpio                   # l'archive aussi
+ujust regenerate-grub
+```
+
+## Les ventilateurs ne réagissent pas
+
+`nct6683` ne sait que lire. Pour piloter le PWM il faut `nct6687`, et les deux ne peuvent
+pas cohabiter :
+
+```sh
+sudo bc250ctl revert sensors
+sudo bc250ctl install fan-control
+sudo systemctl reboot
+```
+
+Si la consigne retombe à chaque redémarrage, c'est normal : le pilote ne la garde pas.
+Soit CoolerControl gère la courbe (`BC250_FAN_PWM=auto`), soit vous fixez une valeur dans
+`/etc/bc250ctl/config.env` et `bc250ctl` installe l'unité qui la repose au boot.
+
+## « cannot be installed while ... is active »
+
+Deux modules visent le même matériel. Le message donne la bascule à faire — c'est presque
+toujours « bascule », pas « abandonne » :
+
+```sh
+sudo bc250ctl revert sensors && sudo bc250ctl install fan-control
+```
+
+## Erreurs SMN dans le journal du governor
+
+Le governor et les écritures SMU partagent la fenêtre PCI `0xB8`/`0xBC`. `bc250ctl` met
+le governor en pause autour de chaque écriture ; si vous lancez un outil amont
+directement, faites-le vous-même :
+
+```sh
+sudo systemctl stop cyan-skillfish-governor-smu
+# ... l'écriture SMU ...
+sudo systemctl start cyan-skillfish-governor-smu
+```
+
 ## `nproc` affiche encore 12
 
 Normal juste après un démarrage à froid. Le masque de cœurs ne prend effet qu'au
@@ -81,6 +142,13 @@ bc250ctl sources --check
 ```
 
 Puis mettez `sources.env` à jour délibérément, après avoir relu le diff amont.
+
+## Les fréquences GPU affichées sont absurdes
+
+Après le déblocage des huit cœurs, `pp_dpm_sclk` remonte des valeurs fausses. C'est un
+défaut de remontée connu, pas une panne du governor : `bc250ctl verify governor` le
+signale et ne le compte pas comme un échec. Lisez les fréquences avec `amdgpu_top` ou
+`nvtop`.
 
 ## Erreur `this needs root`
 

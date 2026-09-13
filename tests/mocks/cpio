@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Mock cpio: consumes the file list on stdin and emits a marker archive that
+# records what would have gone in, so tests can assert on the contents.
+set -euo pipefail
+echo "BC250-MOCK-CPIO"
+while IFS= read -r path; do
+	printf 'entry %s\n' "$path"
+done

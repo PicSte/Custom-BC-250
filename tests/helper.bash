@@ -25,6 +25,9 @@ sandbox_setup() {
 	: >"$MOCK_STATE/calls"
 	: >"$MOCK_STATE/rpm-installed"
 	: >"$MOCK_STATE/lsmod"
+	: >"$MOCK_STATE/unit-files"
+	# Bazzite ships the fan akmod, so the module is normally already there.
+	printf 'nct6687\n' >"$MOCK_STATE/modules-available"
 
 	# umr is discovered through PATH; tests decide whether it is there.
 	export PATH="$MOCK_STATE/bin:$REPO_ROOT/tests/mocks:$PATH"
@@ -45,6 +48,15 @@ fake_sources() {
 	local sum
 	sum=$(sha256sum -- "$mock" | cut -d' ' -f1)
 
+	# Stand-ins for the two .aml tables, with their real checksums.
+	local aml="$BATS_TEST_TMPDIR/aml"
+	mkdir -p "$aml"
+	printf 'SSDT-CST fixture\n' >"$aml/SSDT-CST.aml"
+	printf 'SSDT-PST fixture\n' >"$aml/SSDT-PST.aml"
+	local cst_sum pst_sum
+	cst_sum=$(sha256sum -- "$aml/SSDT-CST.aml" | cut -d' ' -f1)
+	pst_sum=$(sha256sum -- "$aml/SSDT-PST.aml" | cut -d' ' -f1)
+
 	export BC250_SOURCES_FILE="$BATS_TEST_TMPDIR/sources.env"
 	cat >"$BC250_SOURCES_FILE" <<-EOF
 		SRC_CU_LIVE_MANAGER_REPO=file://$REPO_ROOT
@@ -54,8 +66,30 @@ fake_sources() {
 		SRC_SMU_OC_REPO=file://$REPO_ROOT
 		SRC_SMU_OC_REF=2222222222222222222222222222222222222222
 		SRC_SMU_OC_URL=file://$REPO_ROOT
+		SRC_ACPI_CST_REPO=file://$REPO_ROOT
+		SRC_ACPI_CST_REF=3333333333333333333333333333333333333333
+		SRC_ACPI_CST_URL=file://$aml/SSDT-CST.aml
+		SRC_ACPI_CST_SHA256=$cst_sum
+		SRC_ACPI_PST_REPO=file://$REPO_ROOT
+		SRC_ACPI_PST_REF=3333333333333333333333333333333333333333
+		SRC_ACPI_PST_URL=file://$aml/SSDT-PST.aml
+		SRC_ACPI_PST_SHA256=$pst_sum
 	EOF
 }
+
+# acpi_tables_loaded — make cpupower report healthy idle states, i.e. the
+# rebuilt tables are in effect.
+acpi_tables_loaded() {
+	local i
+	: >"$MOCK_STATE/cpupower-idle"
+	for i in $(seq 0 15); do
+		printf 'analyzing CPU %d:\nNumber of idle states: 4\n' "$i" >>"$MOCK_STATE/cpupower-idle"
+	done
+	printf 'available frequency steps: 3.20 GHz, 800 MHz\n' >"$MOCK_STATE/cpupower-freq"
+}
+
+# unit_known <name> — make systemctl list-unit-files report a unit exists.
+unit_known() { printf '%s enabled\n' "$1" >>"$MOCK_STATE/unit-files"; }
 
 # fake_bc250 — a sysfs tree that looks like a BC-250 with 6 cores.
 fake_bc250() {
@@ -88,8 +122,14 @@ bc250ctl() { "$REPO_ROOT/bc250ctl" "$@"; }
 # lib_source — pull the libraries into the current shell to test them directly.
 lib_source() {
 	export BC250_MODULES_DIR="$REPO_ROOT/modules"
-	local l
-	for l in log core state systemd ostree download hw livemgr; do
+
+	# Read the library list out of bc250ctl itself rather than repeating it:
+	# a library added there must not silently go untested here.
+	local libs l
+	libs=$(sed -n 's/^for _lib in \(.*\); do$/\1/p' "$REPO_ROOT/bc250ctl")
+	[[ -n $libs ]] || { echo "could not read the library list from bc250ctl" >&2; return 1; }
+
+	for l in $libs; do
 		# shellcheck source=/dev/null
 		source "$REPO_ROOT/lib/$l.sh"
 	done

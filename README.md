@@ -47,15 +47,25 @@ repassez `--profile`).
 
 ## Modules
 
-| Module | Ce qu'il fait |
-|---|---|
-| `kargs` | Limites mémoire TTM (`ttm.pages_limit`), `mitigations=off` selon le profil |
-| `sensors` | Pilote `nct6683 force=true` pour les températures |
-| `governor` | `cyan-skillfish-governor-smu` + sa courbe fréquence/tension |
-| `gpu-cu` | Déblocage 40 CU et routage des WGP, à chaud via `umr` |
-| `cpu-cores` | Déblocage des 2 cœurs masqués (6c/12t → 8c/16t) |
-| `cpu-oc` | Overclock / undervolt CPU, avec calibration sous charge |
-| `fixes` | Masquage de `hhd` (micro-saccades de l'interface Deck) |
+| Module | Risque | Ce qu'il fait |
+|---|---|---|
+| `kargs` | faible | Limites mémoire TTM, `mitigations=off`, `video=DP-1:e` selon le profil |
+| `acpi` | faible | Tables ACPI reconstruites : C-states pour 16 threads, P-states |
+| `sensors` | aucun | Pilote `nct6683 force=true`, températures en lecture seule |
+| `fan-control` | moyen | Pilote `nct6687` avec PWM. **Exclusif avec `sensors`** |
+| `governor` | faible | `cyan-skillfish-governor-smu` + sa courbe fréquence/tension |
+| `gpu-cu` | moyen | Déblocage 40 CU et routage des WGP, à chaud via `umr` |
+| `cpu-cores` | élevé | Déblocage des 2 cœurs masqués (6c/12t → 8c/16t). **Exige `acpi`** |
+| `cpu-oc` | élevé | Overclock / undervolt CPU, avec calibration sous charge |
+| `fixes` | faible | `hhd`, veille cassée, ZRAM |
+
+Trois relations sont modélisées et vérifiées par l'outil :
+
+- **Dépendance** — `cpu-cores` exige `acpi` (sans les tables reconstruites, les CPU 12-15
+  n'ont aucun C-state et consomment à vide) ; `cpu-oc` exige `cpu-cores` et `gpu-cu`.
+- **Conflit** — `sensors` et `fan-control` visent la même puce Nuvoton. L'un ou l'autre.
+- **Verrou SMU** — le governor et les écritures SMU partagent la même fenêtre PCI
+  `0xB8`/`0xBC`. `bc250ctl` arrête le governor autour de chaque écriture et le relance.
 
 ```sh
 sudo bc250ctl status                # ce qui est appliqué maintenant
@@ -63,6 +73,7 @@ sudo bc250ctl install gpu-cu        # un module à la fois
 sudo bc250ctl verify all            # est-ce que ça a vraiment pris ?
 sudo bc250ctl revert cpu-oc         # retour à l'état d'origine
 sudo bc250ctl menu                  # menu interactif
+bc250ctl catalog --json             # le graphe complet, pour l'outillage
 ```
 
 Ajoutez `--dry-run` à n'importe quelle commande pour voir ce qui se passerait sans rien
@@ -91,6 +102,9 @@ tiré d'une branche mouvante, parce que tout ça s'exécute en root.
 
 - [WinnieLV/bc250-cu-live-manager](https://github.com/WinnieLV/bc250-cu-live-manager) —
   40 CU et routage WGP à chaud, déblocage des cœurs CPU
+- [mendesrr/bc250-acpi-fix-updated-8c](https://github.com/mendesrr/bc250-acpi-fix-updated-8c)
+  — tables SSDT reconstruites (C-states 16 threads, P-states)
+- [Fred78290/nct6687d](https://github.com/Fred78290/nct6687d) — pilote Nuvoton avec PWM
 - [bc250-collective/bc250_smu_oc](https://github.com/bc250-collective/bc250_smu_oc) —
   overclock / undervolt CPU
 - [filippor/cyan-skillfish-governor](https://github.com/filippor/cyan-skillfish-governor)
@@ -120,7 +134,7 @@ de post-installation) et
 
 ```sh
 ./tests/lint.sh     # shellcheck
-bats tests/         # 55 tests
+bats tests/         # 93 tests
 ```
 
 La suite tourne contre un préfixe bac à sable avec les commandes système simulées :
@@ -132,3 +146,5 @@ recette de validation sur matériel réel.
 - [`docs/modules.md`](docs/modules.md) — ce que fait chaque module, en détail
 - [`docs/validation.md`](docs/validation.md) — comment valider sur une vraie carte
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — quand ça ne marche pas
+- [`docs/inventory.md`](docs/inventory.md) — l'écosystème BC-250 : ce qu'on gère, ce
+  qu'on ne gère pas, et pourquoi

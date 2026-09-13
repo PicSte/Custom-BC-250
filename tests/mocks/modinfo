@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Mock modinfo: a module exists if it is listed in $MOCK_STATE/modules-available.
+set -euo pipefail
+: "${MOCK_STATE:?}"
+grep -qxF "${1:-}" "$MOCK_STATE/modules-available" 2>/dev/null

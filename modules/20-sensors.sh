@@ -16,9 +16,14 @@ _sensors_modprobe_file()     { printf '%s\n' "$MODPROBE_DIR/$MODPROBE_FILE_NAME"
 
 mod_describe()    { printf 'temperature sensors (nct6683 force=true)\n'; }
 mod_requires()    { :; }
+# The chip takes one driver or the other, never both.
+mod_conflicts()   { printf '25-fan-control\n'; }
 mod_invalidates() { :; }
 mod_stage()       { printf 'pre-reboot\n'; }
 mod_unattended()  { return 0; }
+mod_risk()        { printf 'none\n'; }
+mod_needs_smu()   { return 1; }
+mod_upstream()    { :; }
 
 # Active when our modprobe drop-ins are on disk.
 mod_active() { [[ -f $(_sensors_modules_load_file) || -f $(_sensors_modprobe_file) ]]; }

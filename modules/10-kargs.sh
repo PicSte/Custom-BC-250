@@ -11,23 +11,31 @@
 KARG_TTM_PAGES='ttm.pages_limit=3959290'
 KARG_TTM_POOL='ttm.page_pool_size=3959290'
 KARG_MITIGATIONS='mitigations=off'
+# DisplayPort hot-plug detect is broken on this board: the kernel can come up
+# without ever noticing the monitor. Forcing the connector on is the blunt fix.
+KARG_DP_FORCE='video=DP-1:e'
 
 mod_describe()    { printf 'kernel arguments (TTM memory limits, mitigations)\n'; }
 mod_requires()    { :; }
+mod_conflicts()   { :; }
 mod_invalidates() { :; }
 mod_stage()       { printf 'pre-reboot\n'; }
 mod_unattended()  { return 0; }
+mod_risk()        { printf 'low\n'; }
+mod_needs_smu()   { return 1; }
+mod_upstream()    { :; }
 
 _kargs_wanted() {
 	[[ ${BC250_KARGS_TTM:-1} == 1 ]] && printf '%s\n%s\n' "$KARG_TTM_PAGES" "$KARG_TTM_POOL"
 	[[ ${BC250_KARGS_MITIGATIONS_OFF:-0} == 1 ]] && printf '%s\n' "$KARG_MITIGATIONS"
+	[[ ${BC250_KARGS_DP_FORCE:-0} == 1 ]] && printf '%s\n' "$KARG_DP_FORCE"
 	return 0
 }
 
 # Active when any kernel argument we manage is on the deployment.
 mod_active() {
 	local karg
-	for karg in "$KARG_TTM_PAGES" "$KARG_TTM_POOL" "$KARG_MITIGATIONS"; do
+	for karg in "$KARG_TTM_PAGES" "$KARG_TTM_POOL" "$KARG_MITIGATIONS" "$KARG_DP_FORCE"; do
 		ostree_karg_present "$karg" && return 0
 	done
 	return 1
@@ -46,7 +54,7 @@ mod_detect() {
 
 mod_status() {
 	local karg out=()
-	for karg in "$KARG_TTM_PAGES" "$KARG_TTM_POOL" "$KARG_MITIGATIONS"; do
+	for karg in "$KARG_TTM_PAGES" "$KARG_TTM_POOL" "$KARG_MITIGATIONS" "$KARG_DP_FORCE"; do
 		ostree_karg_present "$karg" && out+=("${karg%%=*}")
 	done
 	if (( ${#out[@]} == 0 )); then
@@ -98,5 +106,5 @@ mod_verify() {
 }
 
 mod_uninstall() {
-	ostree_karg_remove "$KARG_TTM_PAGES" "$KARG_TTM_POOL" "$KARG_MITIGATIONS"
+	ostree_karg_remove "$KARG_TTM_PAGES" "$KARG_TTM_POOL" "$KARG_MITIGATIONS" "$KARG_DP_FORCE"
 }

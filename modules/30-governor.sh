@@ -32,9 +32,13 @@ GOV_CURVE=(
 
 mod_describe()    { printf 'GPU governor (%s)\n' "$GOV_PKG"; }
 mod_requires()    { :; }
+mod_conflicts()   { :; }
 mod_invalidates() { :; }
 mod_stage()       { printf 'pre-reboot\n'; }
 mod_unattended()  { return 0; }
+mod_risk()        { printf 'low\n'; }
+mod_needs_smu()   { return 1; }
+mod_upstream()    { printf 'https://github.com/filippor/cyan-skillfish-governor\n'; }
 
 # Active when the governor package is layered.
 mod_active() { ostree_pkg_layered "$GOV_PKG"; }
@@ -152,6 +156,13 @@ mod_verify() {
 		if [[ -r $sclk ]]; then
 			log_info "current clocks:"
 			sed 's/^/    /' -- "$sclk" >&2
+			# Known defect: the unlocked core count corrupts what this table
+			# reports. The governor is still doing its job; only the readout
+			# is wrong, so it must not be read as a failure.
+			if [[ $(hw_cpu_cores) == 8 ]]; then
+				log_warn "with 8 cores unlocked, pp_dpm_sclk misreports frequencies —" \
+				         "read the clocks with amdgpu_top or nvtop instead"
+			fi
 		fi
 	else
 		log_warn "could not resolve which DRM card is the BC-250"

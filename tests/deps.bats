@@ -23,6 +23,7 @@ oc_installed() {
 	use_profile max
 	oc_installed
 
+	bc250ctl install acpi
 	run bc250ctl install cpu-cores
 	[ "$status" -eq 0 ]
 	[[ $output == *"60-cpu-oc is now stale"* ]]
@@ -44,6 +45,7 @@ oc_installed() {
 @test "a stale overclock shows up in status and fails verification" {
 	use_profile max
 	oc_installed
+	bc250ctl install acpi
 	bc250ctl install cpu-cores
 
 	run bc250ctl status
@@ -63,8 +65,21 @@ oc_installed() {
 	[[ $output == *"requires 50-cpu-cores"* ]]
 }
 
+@test "the core unlock refuses to run without the rebuilt ACPI tables" {
+	use_profile balanced
+
+	run bc250ctl install cpu-cores
+	[ "$status" -ne 0 ]
+	[[ $output == *"requires 15-acpi"* ]]
+	[[ $output == *"bc250ctl install acpi"* ]]
+
+	# Nothing was armed on the way out.
+	[ ! -f "$BC250_PREFIX/etc/systemd/system/bc250ctl-cpu-cores.service" ]
+}
+
 @test "with the core count settled, the dependency is satisfied" {
 	use_profile max
+	bc250ctl install acpi
 	bc250ctl install cpu-cores
 	bc250ctl install gpu-cu
 
@@ -81,6 +96,7 @@ oc_installed() {
 
 @test "re-calibrating clears the stale mark" {
 	use_profile max
+	bc250ctl install acpi
 	bc250ctl install cpu-cores
 	bc250ctl install gpu-cu
 	mkdir -p "$BC250_PREFIX/var/lib/bc250ctl/venv/bin"
@@ -95,6 +111,7 @@ oc_installed() {
 
 @test "the calibration passes the profile's numbers through unchanged" {
 	use_profile max
+	bc250ctl install acpi
 	bc250ctl install cpu-cores
 	bc250ctl install gpu-cu
 	mkdir -p "$BC250_PREFIX/var/lib/bc250ctl/venv/bin"

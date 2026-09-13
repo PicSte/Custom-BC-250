@@ -89,3 +89,19 @@ setup() { sandbox_setup; lib_source; }
 	[[ $output == *CU_LIVE_MANAGER* ]]
 	[[ $output == *"pinned at"* ]]
 }
+
+@test "the shipped source table points at real upstreams, pinned" {
+	# Read the real file, not the test fixture.
+	local real="$REPO_ROOT/sources.env"
+	local name
+	for name in CU_LIVE_MANAGER SMU_OC ACPI_CST ACPI_PST; do
+		grep -q "^SRC_${name}_REPO=https://github.com/" "$real"
+		grep -qE "^SRC_${name}_REF=[0-9a-f]{40}$" "$real"
+	done
+	# File pins additionally carry a checksum; git pins do not need one.
+	for name in CU_LIVE_MANAGER ACPI_CST ACPI_PST; do
+		grep -qE "^SRC_${name}_SHA256=[0-9a-f]{64}$" "$real"
+	done
+	# No URL may point at a moving branch.
+	! grep -E '^SRC_[A-Z_]+_URL=.*/(main|master|HEAD)/' "$real"
+}

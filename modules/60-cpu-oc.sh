@@ -24,12 +24,16 @@ mod_describe()    { printf 'CPU overclock / undervolt (bc250_smu_oc)\n'; }
 # curve that is stale the moment it is written: both change the power and
 # thermal budget this overclock is measured against.
 mod_requires()    { printf '50-cpu-cores\n40-gpu-cu\n'; }
+mod_conflicts()   { :; }
 mod_invalidates() { :; }
 mod_stage()       { printf 'runtime\n'; }
 
 # Calibration loads every core for minutes and asks questions: never run it
 # unattended from the post-reboot resume unit.
 mod_unattended()  { return 1; }
+mod_risk()        { printf 'high\n'; }
+mod_needs_smu()   { return 0; }
+mod_upstream()    { src_get SMU_OC REPO; }
 
 _oc_requested() { (( ${BC250_CPU_OC_FREQ:-0} > 0 && ${BC250_CPU_OC_VID:-0} > 0 )); }
 
@@ -100,7 +104,9 @@ mod_configure() {
 	[[ -x $(_oc_bin bc250-detect) ]] || die "bc250_smu_oc is not installed; bc_run 'bc250ctl install cpu-oc'"
 
 	log_step "calibrating (this loads every core; it takes a few minutes)"
-	bc_run "$(_oc_bin bc250-detect)" \
+	# bc250-detect writes SMU state as it probes, so the governor cannot be
+	# running: they share the PCI index/data window.
+	smu_critical bc_run "$(_oc_bin bc250-detect)" \
 		-f "$BC250_CPU_OC_FREQ" \
 		-v "$BC250_CPU_OC_VID" \
 		-t "$BC250_CPU_OC_TEMP" \
@@ -111,7 +117,7 @@ mod_configure() {
 		die "calibration produced no configuration at $(_oc_conf)"
 
 	log_step "installing the boot service"
-	bc_run "$(_oc_bin bc250-apply)" --install "$(_oc_conf)" ||
+	smu_critical bc_run "$(_oc_bin bc250-apply)" --install "$(_oc_conf)" ||
 		die "could not install the overclock service"
 
 	unit_enable_now "$OC_SERVICE"
@@ -145,7 +151,7 @@ mod_verify() {
 mod_uninstall() {
 	unit_disable_now "$OC_SERVICE"
 	if [[ -x $(_oc_bin bc250-apply) ]]; then
-		bc_run "$(_oc_bin bc250-apply)" --uninstall || true
+		smu_critical bc_run "$(_oc_bin bc250-apply)" --uninstall || true
 	fi
 	unit_remove "$OC_SERVICE"
 	state_del "stale.60-cpu-oc"

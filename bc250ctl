@@ -14,7 +14,7 @@ BC250_ROOT=$(dirname -- "$BC250_SELF")
 : "${BC250_PROFILES_DIR:=$BC250_ROOT/profiles}"
 : "${BC250_SOURCES_FILE:=$BC250_ROOT/sources.env}"
 
-for _lib in log core state systemd ostree download hw livemgr; do
+for _lib in log core state systemd ostree download hw smu livemgr; do
 	# shellcheck source=/dev/null
 	source "$BC250_LIB_DIR/$_lib.sh"
 done
@@ -40,6 +40,7 @@ Usage:
   bc250ctl revert <module|all>          Put a module back to stock
   bc250ctl doctor                       Hardware and environment report
   bc250ctl sources [--check]            Show pinned upstreams, or check for updates
+  bc250ctl catalog [--json]             The module graph, for tooling and the GUI
   bc250ctl menu                         Interactive menu
 
 Options:
@@ -160,7 +161,6 @@ cmd_status() {
 
 cmd_install() {
 	require_root install "$@"
-	config_validate
 
 	local -a targets
 	targets_into targets "$@" || return 1
@@ -169,6 +169,7 @@ cmd_install() {
 	for id in "${targets[@]}"; do
 		log_step "$(module_short "$id"): $(module_call "$id" describe)"
 		module_check_requires "$id"
+		module_check_conflicts "$id"
 		module_call "$id" install
 		module_invalidate "$id"
 		state_set "applied.$id" "$(date -Is)"
@@ -177,7 +178,6 @@ cmd_install() {
 
 cmd_configure() {
 	require_root configure "$@"
-	config_validate
 
 	local -a targets
 	targets_into targets "$@" || return 1
@@ -190,8 +190,6 @@ cmd_configure() {
 }
 
 cmd_verify() {
-	config_validate
-
 	local -a targets
 	targets_into targets "$@" || return 1
 
@@ -270,6 +268,7 @@ _run_stage() {
 
 		log_step "$(module_short "$id"): $(module_call "$id" describe)"
 		module_check_requires "$id"
+		module_check_conflicts "$id"
 		module_call "$id" install
 		module_invalidate "$id"
 		state_set "applied.$id" "$(date -Is)"
@@ -353,6 +352,71 @@ cmd_resume() {
 
 # --------------------------------------------------------------- doctor ----
 
+# _version_lt <a> <b> — true when version a sorts before b.
+_version_lt() { [[ $1 != "$2" ]] && [[ $(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1) == "$1" ]]; }
+
+# _version_in_range <v> <lo> <hi> — inclusive.
+_version_in_range() {
+	local v=$1 lo=$2 hi=$3
+	_version_lt "$v" "$lo" && return 1
+	_version_lt "$hi" "$v" && return 1
+	return 0
+}
+
+# Kernel releases known to break the BC-250's GPU.
+KNOWN_BAD_KERNELS=('6.15.0:6.15.6' '6.17.8:6.17.10')
+MESA_MINIMUM='25.1.0'
+
+_doctor_kernel_guard() {
+	local release version range
+	release=$(uname -r)
+	version=${release%%-*}
+
+	for range in "${KNOWN_BAD_KERNELS[@]}"; do
+		if _version_in_range "$version" "${range%%:*}" "${range##*:}"; then
+			log_warn "kernel $release is in a range known to break the BC-250 GPU" \
+			         "(${range%%:*} to ${range##*:}). Roll back or move forward before tuning anything."
+			return 1
+		fi
+	done
+	return 0
+}
+
+# _mesa_version — best effort; prints nothing when it cannot tell.
+_mesa_version() {
+	local v
+	if command -v vulkaninfo >/dev/null 2>&1; then
+		v=$(vulkaninfo --summary 2>/dev/null | grep -m1 -o 'Mesa [0-9][0-9.]*' | cut -d' ' -f2)
+		[[ -n $v ]] && { printf '%s\n' "$v"; return 0; }
+	fi
+	v=$(rpm -q --queryformat '%{VERSION}' mesa-dri-drivers 2>/dev/null) || v=''
+	[[ $v == *[0-9]* ]] && printf '%s\n' "$v"
+	return 0
+}
+
+_doctor_mesa_guard() {
+	local v
+	v=$(_mesa_version)
+	if [[ -z $v ]]; then
+		printf 'mesa            unknown (install vulkaninfo to check)\n'
+		return 0
+	fi
+	if _version_lt "$v" "$MESA_MINIMUM"; then
+		printf 'mesa            %s — TOO OLD, %s or newer is required\n' "$v" "$MESA_MINIMUM"
+		return 1
+	fi
+	printf 'mesa            %s\n' "$v"
+}
+
+_doctor_iommu_guard() {
+	local dir="${BC250_PREFIX}/sys/class/iommu"
+	if [[ -d $dir ]] && [[ -n $(ls -A -- "$dir" 2>/dev/null) ]]; then
+		printf 'IOMMU           ACTIVE — unstable on this board, disable it in the BIOS\n'
+		return 1
+	fi
+	printf 'IOMMU           off\n'
+}
+
 cmd_doctor() {
 	printf 'bc250ctl        %s\n' "$BC250_SELF"
 	printf 'prefix          %s\n' "${BC250_PREFIX:-/}"
@@ -362,7 +426,10 @@ cmd_doctor() {
 
 	printf 'rpm-ostree      %s\n' "$(ostree_is_atomic && echo present || echo 'MISSING — this tool targets Bazzite')"
 	printf 'kernel          %s\n' "$(uname -r)"
+	_doctor_mesa_guard || true
+	_doctor_iommu_guard || true
 	printf 'umr             %s\n' "$(hw_has_umr && command -v umr || echo 'not installed')"
+	printf 'cpupower        %s\n' "$(command -v cpupower || echo 'not installed')"
 	printf 'python3         %s\n' "$(command -v python3 || echo 'not installed')"
 	printf 'vulkaninfo      %s\n' "$(command -v vulkaninfo || echo 'not installed')"
 	printf 'stress          %s\n' "$(command -v stress || echo 'not installed')"
@@ -385,6 +452,17 @@ cmd_doctor() {
 	if reboot_is_required; then
 		printf '\nA reboot is pending.\n'
 	fi
+
+	printf '\n'
+	if ( config_validate ) 2>/dev/null; then
+		printf 'configuration    valid\n'
+	else
+		printf 'configuration    INVALID:\n'
+		( config_validate ) 2>&1 | sed 's/^/  /' || true
+	fi
+
+	printf '\n'
+	_doctor_kernel_guard && log_ok "no known-bad kernel, Mesa or IOMMU problem"
 }
 
 # -------------------------------------------------------------- sources ----
@@ -413,6 +491,80 @@ cmd_sources() {
 		fi
 		printf '\n'
 	done
+}
+
+# --------------------------------------------------------------- catalog ----
+
+# JSON built by hand rather than through jq: the strings are ours, and adding
+# a runtime dependency for one command is not worth it.
+
+_json_str() {
+	local v=$1
+	v=${v//\\/\\\\}
+	v=${v//\"/\\\"}
+	v=${v//$'\r'/}
+	v=${v//$'\t'/\\t}
+	v=${v//$'\n'/\\n}
+	printf '"%s"' "$v"
+}
+
+_json_bool() { if "$@" >/dev/null 2>&1; then printf 'true'; else printf 'false'; fi; }
+
+# _json_list — newline-separated stdin to a JSON array of strings.
+_json_list() {
+	local first=1 line
+	printf '['
+	while IFS= read -r line; do
+		[[ -n $line ]] || continue
+		(( first )) || printf ','
+		first=0
+		_json_str "$line"
+	done
+	printf ']'
+}
+
+cmd_catalog() {
+	if [[ ${1:-} != --json && -n ${1:-} ]]; then
+		die "catalog takes --json or nothing"
+	fi
+
+	local id first=1 upstream
+
+	printf '{\n'
+	printf '  "version": 1,\n'
+	printf '  "profile": %s,\n' "$(_json_str "$BC250_PROFILE")"
+	printf '  "reboot_required": %s,\n' "$(_json_bool reboot_is_required)"
+	printf '  "hardware": {"bc250": %s, "gpu_card": %s, "cpu_cores": %s},\n' \
+		"$(_json_bool hw_is_bc250)" \
+		"$(_json_str "$(hw_gpu_card 2>/dev/null || echo '')")" \
+		"$(hw_cpu_cores)"
+	printf '  "modules": [\n'
+
+	for id in $(module_ids); do
+		(( first )) || printf ',\n'
+		first=0
+		upstream=$(module_call "$id" upstream 2>/dev/null || true)
+
+		printf '    {'
+		printf '"id": %s, '            "$(_json_str "$id")"
+		printf '"name": %s, '          "$(_json_str "$(module_short "$id")")"
+		printf '"description": %s, '   "$(_json_str "$(module_call "$id" describe)")"
+		printf '"stage": %s, '         "$(_json_str "$(module_call "$id" stage)")"
+		printf '"risk": %s, '          "$(_json_str "$(module_call "$id" risk)")"
+		printf '"upstream": %s, '      "$(_json_str "$upstream")"
+		printf '"requires": %s, '      "$(module_call "$id" requires | _json_list)"
+		printf '"conflicts": %s, '     "$(module_call "$id" conflicts | _json_list)"
+		printf '"invalidates": %s, '   "$(module_call "$id" invalidates | _json_list)"
+		printf '"needs_smu": %s, '     "$(_json_bool module_call "$id" needs_smu)"
+		printf '"unattended": %s, '    "$(_json_bool module_call "$id" unattended)"
+		printf '"active": %s, '        "$(_json_bool module_call "$id" active)"
+		printf '"matches_config": %s, ' "$(_json_bool module_call "$id" detect)"
+		printf '"stale": %s, '         "$([[ $(state_get "stale.$id" 0) == 1 ]] && printf true || printf false)"
+		printf '"status": %s'          "$(_json_str "$(module_call "$id" status 2>/dev/null || echo '?')")"
+		printf '}'
+	done
+
+	printf '\n  ]\n}\n'
 }
 
 # ----------------------------------------------------------------- menu ----
@@ -492,6 +644,13 @@ main() {
 		apply_profile "$profile"
 	fi
 
+	# Validate once, here, rather than in each command. doctor is the
+	# exception: its job is to report problems, not to die on them.
+	case ${command:-} in
+		''|help|doctor) : ;;
+		*)              config_validate ;;
+	esac
+
 	case ${command:-} in
 		''|help)    usage ;;
 		bootstrap)  cmd_bootstrap "$@" ;;
@@ -504,6 +663,7 @@ main() {
 		revert)     cmd_revert "$@" ;;
 		doctor)     cmd_doctor ;;
 		sources)    cmd_sources "$@" ;;
+		catalog)    cmd_catalog "$@" ;;
 		menu|tui)   cmd_menu ;;
 		*)          die "unknown command: $command (try --help)" ;;
 	esac

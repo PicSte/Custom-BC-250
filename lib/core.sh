@@ -57,8 +57,14 @@ config_load() {
 	: "${BC250_CPU_OC_TEMP:=90}"
 	: "${BC250_KARGS_MITIGATIONS_OFF:=0}"
 	: "${BC250_KARGS_TTM:=1}"
+	: "${BC250_KARGS_DP_FORCE:=0}"
 	: "${BC250_DISABLE_HHD:=0}"
+	: "${BC250_DISABLE_SUSPEND:=0}"
+	: "${BC250_DISABLE_ZRAM:=0}"
 	: "${BC250_SENSORS:=1}"
+	: "${BC250_ACPI:=1}"
+	: "${BC250_FAN_CONTROL:=0}"
+	: "${BC250_FAN_PWM:=auto}"
 }
 
 _is_uint() { [[ $1 =~ ^[0-9]+$ ]]; }
@@ -86,6 +92,23 @@ config_validate() {
 
 	[[ $BC250_CPU_CORES == 6 || $BC250_CPU_CORES == 8 ]] ||
 		die "BC250_CPU_CORES must be 6 or 8, got '$BC250_CPU_CORES'"
+
+	# One driver owns the Nuvoton chip. nct6683 reads, nct6687 reads and
+	# writes; loading both leaves neither working properly.
+	if [[ $BC250_FAN_CONTROL == 1 && $BC250_SENSORS == 1 ]]; then
+		die "BC250_FAN_CONTROL and BC250_SENSORS both ask for the same chip." \
+		    "Fan control already provides the temperatures: set BC250_SENSORS=0."
+	fi
+
+	if [[ $BC250_FAN_PWM != auto ]]; then
+		_require_range BC250_FAN_PWM "$BC250_FAN_PWM" 0 255
+	fi
+
+	# The rebuilt SSDT is what gives CPUs 12-15 their idle states.
+	if [[ $BC250_CPU_CORES == 8 && $BC250_ACPI != 1 ]]; then
+		die "BC250_CPU_CORES=8 needs BC250_ACPI=1: without the rebuilt ACPI tables," \
+		    "CPUs 12-15 get no idle states and burn power doing nothing."
+	fi
 
 	_require_range BC250_GOV_FREQ_MIN "$BC250_GOV_FREQ_MIN" 200 2000
 	_require_range BC250_GOV_FREQ_MAX "$BC250_GOV_FREQ_MAX" 200 2000
@@ -203,6 +226,30 @@ module_check_requires() {
 		if ! module_call "$resolved" detect >/dev/null 2>&1; then
 			die "$id requires $resolved, which is not applied yet." \
 			    "Run: bc250ctl install $(module_short "$resolved")"
+		fi
+	done
+}
+
+# module_check_conflicts <id>
+#
+# Refuses to install a module while something it is mutually exclusive with is
+# still in place. The message names the way out, because the answer is almost
+# always "switch", not "give up".
+module_check_conflicts() {
+	local id=$1 other resolved
+
+	# A module that already matches its configuration has nothing to install,
+	# so it cannot conflict with anything. Without this, `install all` on a
+	# profile that leaves fan control off would still trip over the sensors
+	# module it is exclusive with.
+	module_call "$id" detect >/dev/null 2>&1 && return 0
+	for other in $(module_call "$id" conflicts 2>/dev/null || true); do
+		resolved=$(module_resolve "$other") ||
+			die "module $id declares unknown conflict '$other'"
+		if module_call "$resolved" active >/dev/null 2>&1; then
+			die "$id cannot be installed while $resolved is active — they claim the same hardware." \
+			    "Switch with: bc250ctl revert $(module_short "$resolved") &&" \
+			    "bc250ctl install $(module_short "$id")"
 		fi
 	done
 }

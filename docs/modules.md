@@ -1,16 +1,39 @@
 # Les modules en détail
 
 Chaque module est un fichier de `modules/`, avec le même contrat : `describe`,
-`requires`, `invalidates`, `stage`, `unattended`, `active`, `detect`, `status`,
-`install`, `configure`, `verify`, `uninstall`. Le préfixe numérique fixe l'ordre
-d'application.
+`requires`, `conflicts`, `invalidates`, `stage`, `unattended`, `risk`, `needs_smu`,
+`upstream`, `active`, `detect`, `status`, `install`, `configure`, `verify`,
+`uninstall`. Le préfixe numérique fixe l'ordre d'application.
 
 Deux notions à ne pas confondre :
 
 - **`detect`** — « l'état correspond-il à ce que la configuration demande ? » Vrai, donc,
   pour un module à qui on n'a rien demandé.
 - **`active`** — « y a-t-il quelque chose d'appliqué au matériel ? » C'est cette
-  question-là qui décide si un changement ailleurs rend ce module caduc.
+  question-là qui décide si un changement ailleurs rend ce module caduc, et si un
+  conflit doit être signalé.
+
+`bc250ctl catalog --json` publie tout ça sous forme lisible par une machine. C'est ce que
+consommera l'interface graphique : elle n'aura aucune métadonnée en propre, et un module
+ajouté ici apparaîtra dans l'UI sans y toucher.
+
+---
+
+## Le verrou SMU
+
+Trois modules parlent au SMU, et deux d'entre eux ne peuvent pas le faire en même temps
+que le troisième.
+
+Le governor, le déblocage des cœurs et l'overclock CPU passent tous par la même fenêtre
+index/data en configuration PCI : registres `0xB8`/`0xBC` du device `00:00.0`. Il n'y a
+aucun arbitrage matériel. Si le governor écrit un index pendant qu'un autre outil est au
+milieu d'une transaction, les deux finissent par lire et écrire à de mauvaises adresses
+SMN.
+
+`lib/smu.sh` en fait une section critique : `smu_critical` arrête
+`cyan-skillfish-governor-smu` s'il tourne, exécute l'écriture, et le relance — y compris
+si la commande échoue ou est interrompue. Les modules concernés le déclarent avec
+`mod_needs_smu`.
 
 ---
 
@@ -26,6 +49,29 @@ des performances. C'est un choix, pas un réglage évident : il reste optionnel 
 
 Étape *pre-reboot* : `rpm-ostree kargs` ne prend effet qu'au redémarrage.
 
+## `15-acpi` — tables ACPI
+
+Le SSDT d'origine de la carte déclare des objets processeur jusqu'à `C00B`, soit douze
+threads. C'est correct sur une BC-250 à six cœurs, et faux dès que les deux cœurs masqués
+arrivent : les CPU 12-15 se retrouvent sans aucun état cpuidle et consomment à vide.
+
+Les tables reconstruites étendent les déclarations jusqu'à `C00F` et apportent aussi la
+table de P-states (800-3200 MHz). C'est pour cette seconde raison que le module est dans
+le profil `safe` et pas seulement traité comme une dépendance du déblocage : il améliore
+une carte restée à six cœurs.
+
+Le chargement se fait avant les tables du firmware, depuis une archive cpio que GRUB
+passe au noyau comme initrd précoce :
+
+```
+/boot/SSDT_ACPI.cpio                          kernel/firmware/acpi/SSDT-{CST,PST}.aml
+/etc/default/grub                             GRUB_EARLY_INITRD_LINUX_CUSTOM=...
+ujust regenerate-grub                         (grub2-mkconfig en repli)
+```
+
+`verify` lit `cpupower -c all idle-info` : le moindre CPU annonçant zéro état d'inactivité
+signifie que les tables ne sont pas chargées.
+
 ## `20-sensors` — températures
 
 La puce Nuvoton de la BC-250 annonce un identifiant que le pilote `nct6683` ne
@@ -35,6 +81,27 @@ reconnaît pas ; il faut donc forcer l'attachement. `force=true` est de la lectu
 Écrit `/etc/modules-load.d/99-bc250-sensors.conf` et
 `/etc/modprobe.d/99-bc250-sensors.conf`, puis tente un `modprobe` immédiat — si ça
 passe, pas besoin de redémarrer.
+
+## `25-fan-control` — ventilation
+
+Deux pilotes revendiquent la puce Nuvoton de la carte, et un seul peut l'avoir :
+
+- `nct6683`, dans le noyau, **lecture seule**. Températures, rien d'autre.
+- `nct6687` ([`Fred78290/nct6687d`](https://github.com/Fred78290/nct6687d)), hors arbre,
+  **lecture/écriture**. Le seul chemin vers le PWM.
+
+D'où un conflit déclaré avec `20-sensors`, et non une extension. Bazzite livre `nct6687d`
+sous forme d'akmod, donc dans le cas courant il n'y a rien à installer : le travail
+consiste à choisir le bon pilote et à faire tenir la consigne de ventilation.
+
+Car le pilote **oublie ses valeurs PWM à chaque redémarrage**. `BC250_FAN_PWM` tranche :
+
+- `auto` — la courbe appartient à CoolerControl, qui gère son propre service.
+- un entier `0`-`255` — `bc250ctl` installe une unité qui repose cette consigne au
+  démarrage, après avoir basculé chaque canal en mode manuel.
+
+Le module retire lui-même les fichiers de `20-sensors` au passage : laisser les deux
+configurations en place ne donne pas deux pilotes, ça n'en donne aucun qui fonctionne.
 
 ## `30-governor` — governor GPU
 
@@ -130,11 +197,22 @@ automatique après redémarrage le met de côté et vous dit de le lancer à la 
 Sur une carte débloquée à 8 cœurs (16 threads), la charge est donc un peu plus légère
 qu'elle ne devrait — gardez-le en tête en interprétant un résultat « stable ».
 
-## `70-fixes` — divers
+## `70-fixes` — quirks de la carte
 
-`hhd`, le démon pour consoles portables de Bazzite, interroge du matériel que la BC-250
-n'a pas, et ça se voit sous forme de micro-saccades dans l'interface Deck. Le masquer
-est le correctif documenté.
+Trois correctifs indépendants, chacun derrière son propre indicateur parce qu'aucun n'est
+souhaité universellement.
+
+**`hhd`** — le démon pour consoles portables de Bazzite interroge du matériel que la
+BC-250 n'a pas, et ça se voit sous forme de micro-saccades dans l'interface Deck. Le
+masquer est le correctif documenté.
+
+**Veille** — s2idle est cassé : la carte s'endort et ne se réveille pas. Laisser la mise
+en veille active n'est pas une fonctionnalité, c'est un piège. Le module masque
+`sleep.target` et ses trois voisins.
+
+**ZRAM** — le swap compressé est mis en cause dans des plantages de jeux (RDR2, Company
+of Heroes 3). Le nom de l'unité dépend du générateur que l'image embarque, donc le module
+essaie les variantes connues plutôt que d'en supposer une.
 
 L'autre agacement connu — MangoHud et radeontop qui annoncent une utilisation GPU à
 plusieurs centaines de pour cent — n'est pas traité ici : il est corrigé par

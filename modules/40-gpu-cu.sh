@@ -15,9 +15,13 @@
 
 mod_describe()    { printf '40 CU unlock and WGP routing (runtime, via umr)\n'; }
 mod_requires()    { :; }
+mod_conflicts()   { :; }
 mod_invalidates() { printf '60-cpu-oc\n'; }   # changes the shared power/thermal budget
 mod_stage()       { printf 'runtime\n'; }
 mod_unattended()  { return 0; }
+mod_risk()        { printf 'medium\n'; }
+mod_needs_smu()   { return 1; }
+mod_upstream()    { src_get CU_LIVE_MANAGER REPO; }
 
 # Active when a routing table is replayed at boot.
 mod_active() { unit_exists "$LM_SERVICE"; }
