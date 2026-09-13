@@ -101,14 +101,21 @@ print(d['profile'], d['hardware']['bc250'], d['hardware']['gpu_card'], d['versio
 	[ "$out" = "balanced True card1 1" ]
 }
 
-@test "a status containing quotes does not break the JSON" {
-	# 40-gpu-cu's status prints layout "all", which has to be escaped.
-	local status
-	status=$(catalog | python3 -c "
+@test "text that needs escaping survives the round trip" {
+	# The WGP layout is free text, so it is the one value a person can put a
+	# quote or a backslash into. Written through the tool it has to come back
+	# out intact, and leave a file the tool can still read.
+	local awkward
+	awkward='a"b\c'
+	bc250ctl config set "BC250_GPU_WGP_LAYOUT=${awkward}"
+
+	bc250ctl config --json 2>/dev/null | python3 -m json.tool >/dev/null
+
+	local round_trip
+	round_trip=$(bc250ctl config --json 2>/dev/null | python3 -c "
 import json,sys
-m = {x['id']: x for x in json.load(sys.stdin)['modules']}
-print(m['40-gpu-cu']['status'])")
-	[[ $status == *'"all"'* ]]
+print(json.load(sys.stdin)['values']['BC250_GPU_WGP_LAYOUT']['value'])")
+	[ "$round_trip" = "$awkward" ]
 }
 
 @test "catalog rejects an argument it does not understand" {

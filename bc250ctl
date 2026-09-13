@@ -630,6 +630,16 @@ _assignments_into() {
 	mapfile -t _out <<<"$list"
 }
 
+# _shell_quote <value>
+#
+# The configuration file is sourced by bash, so a value carrying a quote or a
+# backslash would make it unparseable — and `config set` must never be able to
+# write a file the tool can no longer read. Single quotes handle everything,
+# including the single quote itself.
+_shell_quote() {
+	printf "'%s'" "${1//\'/\'\\\'\'}"
+}
+
 # _config_candidate <destination> <assignments...>
 #
 # Writes what the config file would become: the current file with those keys
@@ -646,7 +656,7 @@ _config_candidate() {
 			for arg in "$@"; do
 				key=${arg%%=*}
 				if [[ $line == "$key="* ]]; then
-					matched=$arg
+					matched="${key}=$(_shell_quote "${arg#*=}")"
 					seen+=" $key"
 					break
 				fi
@@ -659,7 +669,8 @@ _config_candidate() {
 
 	for arg in "$@"; do
 		key=${arg%%=*}
-		[[ $seen == *" $key"* ]] || printf '%s\n' "$arg" >>"$dest"
+		[[ $seen == *" $key"* ]] ||
+			printf '%s=%s\n' "$key" "$(_shell_quote "${arg#*=}")" >>"$dest"
 	done
 }
 

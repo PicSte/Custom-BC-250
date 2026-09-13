@@ -17,7 +17,7 @@
 
 CORES_SERVICE='bc250ctl-cpu-cores.service'
 
-mod_describe()    { printf 'CPU core unlock (6c/12t -> 8c/16t, SMU core mask)\n'; }
+mod_describe()    { printf 'déblocage des cœurs CPU (6c/12t → 8c/16t, masque SMU)\n'; }
 # Without the rebuilt SSDT tables, CPUs 12-15 come up with no idle states at
 # all and burn power doing nothing. The unlock is not worth having without it.
 mod_requires()    { printf '15-acpi\n'; }
@@ -47,10 +47,10 @@ mod_status() {
 	local now
 	now=$(hw_cpu_cores)
 	if [[ ${BC250_CPU_CORES:-6} != 8 ]]; then
-		printf 'stock (%s cores online)\n' "$now"
+		printf 'usine (%s cœurs en ligne)\n' "$now"
 		return 0
 	fi
-	printf 'boot unit %s, %s cores online\n' "$(unit_status_line "$CORES_SERVICE")" "$now"
+	printf 'unité de démarrage %s, %s cœurs en ligne\n' "$(unit_status_line "$CORES_SERVICE")" "$now"
 }
 
 mod_install() {

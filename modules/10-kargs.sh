@@ -15,7 +15,7 @@ KARG_MITIGATIONS='mitigations=off'
 # without ever noticing the monitor. Forcing the connector on is the blunt fix.
 KARG_DP_FORCE='video=DP-1:e'
 
-mod_describe()    { printf 'kernel arguments (TTM memory limits, mitigations)\n'; }
+mod_describe()    { printf 'arguments noyau (limites mémoire TTM, mitigations)\n'; }
 mod_requires()    { :; }
 mod_conflicts()   { :; }
 mod_invalidates() { :; }
@@ -58,9 +58,9 @@ mod_status() {
 		ostree_karg_present "$karg" && out+=("${karg%%=*}")
 	done
 	if (( ${#out[@]} == 0 )); then
-		printf 'none of our kernel arguments are set\n'
+		printf 'aucun argument noyau posé\n'
 	else
-		printf 'set: %s\n' "${out[*]}"
+		printf 'posés : %s\n' "${out[*]}"
 	fi
 }
 

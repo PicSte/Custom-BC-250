@@ -14,7 +14,7 @@ MODPROBE_FILE_NAME='99-bc250-sensors.conf'
 _sensors_modules_load_file() { printf '%s\n' "$MODULES_LOAD_DIR/$MODULES_LOAD_FILE_NAME"; }
 _sensors_modprobe_file()     { printf '%s\n' "$MODPROBE_DIR/$MODPROBE_FILE_NAME"; }
 
-mod_describe()    { printf 'temperature sensors (nct6683 force=true)\n'; }
+mod_describe()    { printf 'capteurs de température (nct6683 force=true)\n'; }
 mod_requires()    { :; }
 # The chip takes one driver or the other, never both.
 mod_conflicts()   { printf '25-fan-control\n'; }
@@ -35,13 +35,13 @@ mod_detect() {
 
 mod_status() {
 	if ! mod_detect; then
-		printf 'not configured\n'
+		printf 'non configurés\n'
 		return 0
 	fi
 	if lsmod 2>/dev/null | grep -q "^${SENSORS_MODULE}\b"; then
-		printf 'configured, %s loaded\n' "$SENSORS_MODULE"
+		printf 'configurés, %s chargé\n' "$SENSORS_MODULE"
 	else
-		printf 'configured, %s not loaded (reboot pending?)\n' "$SENSORS_MODULE"
+		printf 'configurés, %s non chargé (redémarrage en attente ?)\n' "$SENSORS_MODULE"
 	fi
 }
 

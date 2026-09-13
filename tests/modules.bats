@@ -112,6 +112,6 @@ setup() { sandbox_setup; lib_source; }
 	run bc250ctl modules
 	[ "$status" -eq 0 ]
 	[[ $output == *"gpu-cu"* ]]
-	[[ $output == *"40 CU unlock"* ]]
+	[[ $output == *"40 CU"* ]]
 	[[ $output == *"runtime"* ]]
 }

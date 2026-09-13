@@ -17,4 +17,9 @@ echo "==> tests and mocks"
 shellcheck -e SC1091 tests/helper.bash tests/lint.sh || status=1
 shellcheck tests/mocks/* || status=1
 
+echo "==> python"
+if command -v python3 >/dev/null 2>&1; then
+	python3 tests/pysyntax.py || status=1
+fi
+
 exit "$status"

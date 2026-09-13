@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=BC-250
+Name[en]=BC-250 Manager
+Comment=Installer, configurer et surveiller les optimisations de la carte BC-250
+Comment[en]=Install, configure and monitor BC-250 tweaks
+Exec=bc250-gui
+Icon=computer-symbolic
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=bc250;gpu;overclock;bazzite;
+StartupNotify=true

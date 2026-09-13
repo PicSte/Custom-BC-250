@@ -13,7 +13,7 @@
 # on its own. BC250_GPU_WGP_LAYOUT takes 'all', 'stock', or a comma-separated
 # list of SE.SH.WGP triples to leave disabled (for a board with a bad WGP).
 
-mod_describe()    { printf '40 CU unlock and WGP routing (runtime, via umr)\n'; }
+mod_describe()    { printf 'déblocage 40 CU et routage des WGP (à chaud, via umr)\n'; }
 mod_requires()    { :; }
 mod_conflicts()   { :; }
 mod_invalidates() { printf '60-cpu-oc\n'; }   # changes the shared power/thermal budget
@@ -37,10 +37,10 @@ mod_detect() {
 
 mod_status() {
 	if [[ ${BC250_GPU_WGP_LAYOUT:-stock} == stock ]]; then
-		printf 'stock routing (24 CU)\n'
+		printf 'routage usine (24 CU)\n'
 		return 0
 	fi
-	printf 'layout "%s", boot service %s\n' \
+	printf 'routage « %s », service de démarrage %s\n' \
 		"${BC250_GPU_WGP_LAYOUT}" "$(unit_status_line "$LM_SERVICE")"
 }
 

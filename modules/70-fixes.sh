@@ -22,7 +22,7 @@ SLEEP_TARGETS=(sleep.target suspend.target hibernate.target hybrid-sleep.target)
 # The unit name depends on which zram generator the image ships.
 ZRAM_UNITS=(swap-create@zram0.service systemd-zram-setup@zram0.service zram-swap.service)
 
-mod_describe()    { printf 'board quirks (hhd stutter, broken suspend, zram crashes)\n'; }
+mod_describe()    { printf 'correctifs de la carte (saccades hhd, veille cassée, plantages ZRAM)\n'; }
 mod_requires()    { :; }
 mod_conflicts()   { :; }
 mod_invalidates() { :; }
@@ -76,22 +76,22 @@ mod_status() {
 
 	if [[ ${BC250_DISABLE_HHD:-0} == 1 ]]; then
 		if ! _unit_known "$HHD_UNIT"; then out+=('hhd absent')
-		elif _hhd_done;                then out+=('hhd masked')
-		else                                out+=('hhd pending')
+		elif _hhd_done;                then out+=('hhd masqué')
+		else                                out+=('hhd à faire')
 		fi
 	fi
 	if [[ ${BC250_DISABLE_SUSPEND:-0} == 1 ]]; then
-		_suspend_done && out+=('suspend off') || out+=('suspend pending')
+		_suspend_done && out+=('veille désactivée') || out+=('veille à faire')
 	fi
 	if [[ ${BC250_DISABLE_ZRAM:-0} == 1 ]]; then
-		if ! _zram_unit >/dev/null; then out+=('no zram on this image')
-		elif _zram_done;             then out+=('zram off')
-		else                              out+=('zram pending')
+		if ! _zram_unit >/dev/null; then out+=('pas de zram sur cette image')
+		elif _zram_done;             then out+=('zram désactivé')
+		else                              out+=('zram à faire')
 		fi
 	fi
 
 	if (( ${#out[@]} == 0 )); then
-		printf 'no quirk fixes requested\n'
+		printf 'aucun correctif demandé\n'
 		return 0
 	fi
 

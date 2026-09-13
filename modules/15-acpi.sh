@@ -23,7 +23,7 @@ ACPI_GRUB_KEY='GRUB_EARLY_INITRD_LINUX_CUSTOM'
 _acpi_cpio()      { printf '%s\n' "${BC250_PREFIX}/boot/${ACPI_CPIO_NAME}"; }
 _acpi_grub_conf() { printf '%s\n' "${BC250_PREFIX}/etc/default/grub"; }
 
-mod_describe()    { printf 'ACPI processor tables (C-states for 16 threads, P-states)\n'; }
+mod_describe()    { printf 'tables ACPI (C-states pour 16 threads, P-states)\n'; }
 mod_requires()    { :; }
 mod_conflicts()   { :; }
 mod_invalidates() { :; }
@@ -51,19 +51,19 @@ mod_detect() {
 
 mod_status() {
 	if [[ ${BC250_ACPI:-1} != 1 ]]; then
-		printf 'stock firmware tables\n'
+		printf 'tables du firmware, non modifiées\n'
 		return 0
 	fi
 	if ! mod_active; then
-		printf 'not installed\n'
+		printf 'non installées\n'
 		return 0
 	fi
 	local zero
 	zero=$(cpupower -c all idle-info 2>/dev/null | grep -c 'Number of idle states: 0' || true)
 	if [[ ${zero:-0} == 0 ]]; then
-		printf 'installed, every CPU has idle states\n'
+		printf 'installées, tous les CPU ont des états de repos\n'
 	else
-		printf 'installed, %s CPU(s) still without idle states (reboot pending?)\n' "$zero"
+		printf 'installées, %s CPU encore sans état de repos (redémarrage en attente ?)\n' "$zero"
 	fi
 }
 

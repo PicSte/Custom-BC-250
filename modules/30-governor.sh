@@ -30,7 +30,7 @@ GOV_CURVE=(
 	2000:960
 )
 
-mod_describe()    { printf 'GPU governor (%s)\n' "$GOV_PKG"; }
+mod_describe()    { printf 'governor GPU (%s)\n' "$GOV_PKG"; }
 mod_requires()    { :; }
 mod_conflicts()   { :; }
 mod_invalidates() { :; }
@@ -47,7 +47,7 @@ mod_detect() { ostree_pkg_layered "$GOV_PKG"; }
 
 mod_status() {
 	if ! mod_detect; then
-		printf 'not installed\n'
+		printf 'non installé\n'
 		return 0
 	fi
 	printf '%s, %s-%s MHz / max %s mV\n' \

@@ -29,3 +29,21 @@ jobs:
       # so no BC-250 and no root are needed.
       - name: Test
         run: bats tests/
+
+  gui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The GUI suite drives the real bc250ctl in a sandbox prefix, and needs
+      # a display to instantiate widgets on. The tests that need GTK skip
+      # themselves when it is absent, so this job stays useful even if the
+      # toolkit disappears from the runner image.
+      - name: Install GTK4, libadwaita and pytest
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
+                                  python3-pytest xvfb
+
+      - name: Test
+        run: xvfb-run -a python3 -m pytest gui/tests/ -q

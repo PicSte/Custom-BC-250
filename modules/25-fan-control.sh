@@ -23,7 +23,7 @@ FAN_MODPROBE='99-bc250-fan.conf'
 _fan_modules_load_file() { printf '%s\n' "$MODULES_LOAD_DIR/$FAN_MODULES_LOAD"; }
 _fan_modprobe_file()     { printf '%s\n' "$MODPROBE_DIR/$FAN_MODPROBE"; }
 
-mod_describe()    { printf 'fan control (nct6687 PWM, replaces read-only sensors)\n'; }
+mod_describe()    { printf 'pilotage des ventilateurs (PWM nct6687, remplace les capteurs)\n'; }
 mod_requires()    { :; }
 mod_conflicts()   { printf '20-sensors\n'; }
 mod_invalidates() { :; }
@@ -45,18 +45,18 @@ mod_detect() {
 
 mod_status() {
 	if [[ ${BC250_FAN_CONTROL:-0} != 1 ]]; then
-		printf 'not enabled (temperatures only, see sensors)\n'
+		printf 'désactivé (températures seules, voir sensors)\n'
 		return 0
 	fi
 	if ! mod_active; then
-		printf 'not configured\n'
+		printf 'non configuré\n'
 		return 0
 	fi
 	local hwmon
 	if hwmon=$(_fan_hwmon); then
-		printf 'active on %s, duty %s\n' "$(basename "$hwmon")" "${BC250_FAN_PWM:-auto}"
+		printf 'actif sur %s, consigne %s\n' "$(basename "$hwmon")" "${BC250_FAN_PWM:-auto}"
 	else
-		printf 'configured, driver not bound yet (reboot pending?)\n'
+		printf 'configuré, pilote pas encore attaché (redémarrage en attente ?)\n'
 	fi
 }
 

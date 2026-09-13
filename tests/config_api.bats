@@ -92,10 +92,13 @@ pick() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 
 @test "set writes the value" {
 	bc250ctl config set BC250_GOV_FREQ_MAX=1600
-	grep -q '^BC250_GOV_FREQ_MAX=1600$' "$BC250_PREFIX/etc/bc250ctl/config.env"
+	# Assert on the effective value, not the file's bytes: how a value is
+	# written is the writer's business, what it reads back as is the contract.
 	local out
 	out=$(config_json | pick "d['values']['BC250_GOV_FREQ_MAX']['value']")
 	[ "$out" = 1600 ]
+	out=$(config_json | pick "d['values']['BC250_GOV_FREQ_MAX']['source']")
+	[ "$out" = file ]
 }
 
 @test "set validates the whole resulting config, not just the keys touched" {
@@ -126,8 +129,37 @@ pick() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 }
 
 @test "set appends a key the file did not have" {
+	local before after
+	before=$(config_json | pick "d['values']['BC250_ALLOW_EXTREME_VID']['source']")
+	[ "$before" = default ]
+
 	bc250ctl config set BC250_ALLOW_EXTREME_VID=1
-	grep -q '^BC250_ALLOW_EXTREME_VID=1$' "$BC250_PREFIX/etc/bc250ctl/config.env"
+
+	after=$(config_json | pick "d['values']['BC250_ALLOW_EXTREME_VID']['source']")
+	[ "$after" = file ]
+	[ "$(config_json | pick "d['values']['BC250_ALLOW_EXTREME_VID']['value']")" = 1 ]
+}
+
+@test "written values are quoted, so the file stays sourceable" {
+	# The config file is sourced by bash. A value carrying a quote or a
+	# backslash has to survive being written, or the tool can no longer read
+	# its own configuration.
+	bc250ctl config set 'BC250_GPU_WGP_LAYOUT=1.0.3,"x"\\y'
+
+	grep -q "^BC250_GPU_WGP_LAYOUT='" "$BC250_PREFIX/etc/bc250ctl/config.env"
+
+	run bc250ctl config --json
+	[ "$status" -eq 0 ]
+	local value
+	value=$(config_json | pick "d['values']['BC250_GPU_WGP_LAYOUT']['value']")
+	[ "$value" = '1.0.3,"x"\\y' ]
+}
+
+@test "a value containing a single quote survives too" {
+	bc250ctl config set "BC250_GPU_WGP_LAYOUT=it's fine"
+	local value
+	value=$(config_json | pick "d['values']['BC250_GPU_WGP_LAYOUT']['value']")
+	[ "$value" = "it's fine" ]
 }
 
 @test "config commands still work when the current config is invalid" {

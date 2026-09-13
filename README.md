@@ -12,6 +12,23 @@ Il ne remplace aucun de ces projets : il les télécharge à une version épingl
 installe et les configure ensemble de façon cohérente. Tout le mérite technique revient
 à leurs auteurs — voir [Sources](#sources).
 
+## L'interface graphique
+
+```sh
+bc250-gui          # ou « BC-250 » dans le menu des applications
+```
+
+Une application GTK4 qui regroupe tout : l'état de chaque module et son
+installation, les réglages avec leurs garde-fous, la supervision en direct, et
+un assistant de première installation qui reprend après chaque redémarrage.
+
+Elle ne contient aucun savoir métier : elle lit `bc250ctl catalog --json` et
+`bc250ctl config --json`, donc un module ajouté au moteur y apparaît tout seul.
+Elle ne tourne jamais en root — le travail privilégié passe par `pkexec`, et
+il est regroupé pour qu'une action ne demande qu'une autorisation.
+
+Détails dans [`docs/gui.md`](docs/gui.md).
+
 ## Démarrage rapide
 
 ```sh
@@ -21,6 +38,7 @@ sudo ./install.sh
 
 sudo bc250ctl doctor                        # que voit l'outil ?
 sudo bc250ctl bootstrap --profile safe      # commencer prudemment
+bc250-gui                                   # ou tout faire depuis l'interface
 ```
 
 `bootstrap` s'arrête quand un redémarrage est nécessaire, arme un service systemd, et
@@ -74,6 +92,8 @@ sudo bc250ctl verify all            # est-ce que ça a vraiment pris ?
 sudo bc250ctl revert cpu-oc         # retour à l'état d'origine
 sudo bc250ctl menu                  # menu interactif
 bc250ctl catalog --json             # le graphe complet, pour l'outillage
+bc250ctl config --json              # réglages effectifs et leur schéma
+bc250ctl telemetry --json           # températures, fréquences, ventilation
 ```
 
 Ajoutez `--dry-run` à n'importe quelle commande pour voir ce qui se passerait sans rien
@@ -133,18 +153,21 @@ de post-installation) et
 ## Développement
 
 ```sh
-./tests/lint.sh     # shellcheck
-bats tests/         # 93 tests
+./tests/lint.sh                          # shellcheck + parse des sources Python
+bats tests/                              # 118 tests, le moteur
+xvfb-run -a python3 -m pytest gui/tests/ # 47 tests, l'interface
 ```
 
-La suite tourne contre un préfixe bac à sable avec les commandes système simulées :
-ni BC-250 ni root nécessaires, et aucun accès réseau. Voir `docs/validation.md` pour la
-recette de validation sur matériel réel.
+Les deux suites tournent contre un préfixe bac à sable avec les commandes système
+simulées : ni BC-250 ni root nécessaires, et aucun accès réseau. Voir
+`docs/validation.md` pour la recette de validation sur matériel réel.
 
 ## Documentation
 
 - [`docs/modules.md`](docs/modules.md) — ce que fait chaque module, en détail
 - [`docs/validation.md`](docs/validation.md) — comment valider sur une vraie carte
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — quand ça ne marche pas
+- [`docs/gui.md`](docs/gui.md) — l'interface graphique : ce qu'elle fait, et pourquoi
+  elle ne décide rien
 - [`docs/inventory.md`](docs/inventory.md) — l'écosystème BC-250 : ce qu'on gère, ce
   qu'on ne gère pas, et pourquoi

@@ -42,10 +42,10 @@ unit_remove() {
 unit_status_line() {
 	local name=$1
 	if ! unit_exists "$name"; then
-		printf 'absent\n'
+		printf 'absente\n'
 	elif unit_is_active "$name"; then
-		unit_is_enabled "$name" && printf 'active (enabled)\n' || printf 'active (not enabled)\n'
+		unit_is_enabled "$name" && printf 'active (activée)\n' || printf 'active (non activée)\n'
 	else
-		unit_is_enabled "$name" && printf 'inactive (enabled)\n' || printf 'inactive\n'
+		unit_is_enabled "$name" && printf 'inactive (activée)\n' || printf 'inactive\n'
 	fi
 }

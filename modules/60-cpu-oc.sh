@@ -19,7 +19,7 @@ _oc_conf()   { printf '%s\n' "${BC250_ETC}/overclock.conf"; }
 _oc_applied(){ printf '%s\n' "${BC250_PREFIX}/etc/bc250-smu-oc.conf"; }
 _oc_bin()    { printf '%s\n' "${BC250_VENV}/bin/$1"; }
 
-mod_describe()    { printf 'CPU overclock / undervolt (bc250_smu_oc)\n'; }
+mod_describe()    { printf 'overclock / undervolt CPU (bc250_smu_oc)\n'; }
 # Calibrating before the core count and GPU routing are settled produces a
 # curve that is stale the moment it is written: both change the power and
 # thermal budget this overclock is measured against.
@@ -50,10 +50,10 @@ mod_detect() {
 
 mod_status() {
 	if ! _oc_requested; then
-		printf 'no overclock requested\n'
+		printf 'aucun overclock demandé\n'
 		return 0
 	fi
-	printf '%s MHz @ max %s mV, %s\n' \
+	printf '%s MHz @ %s mV max, %s\n' \
 		"${BC250_CPU_OC_FREQ}" "${BC250_CPU_OC_VID}" "$(unit_status_line "$OC_SERVICE")"
 }
 
