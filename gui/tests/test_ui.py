@@ -122,6 +122,52 @@ class TestSettingsForm:
         row = page._rows["BC250_CPU_OC_VID"]
         assert row.get_adjustment().get_upper() == settings.limits["vid_absolute_max"]
 
+    def test_the_gpu_voltage_rows_stop_at_their_own_ceiling(self, ui):
+        window, catalog, settings = ui
+        page = SettingsPage(window)
+        page.update(settings, catalog)
+
+        # A different budget from the CPU, with much lower limits.
+        for key in ("BC250_GOV_VOLT_MIN", "BC250_GOV_VOLT_MAX"):
+            assert page._rows[key].get_adjustment().get_upper() == \
+                settings.limits["gpu_volt_safe_max"]
+
+    def test_the_gpu_lock_lifts_only_the_gpu_rows(self, ui):
+        window, catalog, settings = ui
+        page = SettingsPage(window)
+        page.update(settings, catalog)
+
+        page._rows["BC250_ALLOW_EXTREME_GPU_VOLT"].set_active(True)
+
+        assert page._rows["BC250_GOV_VOLT_MAX"].get_adjustment().get_upper() == \
+            settings.limits["gpu_volt_absolute_max"]
+        # The CPU ceiling is a separate budget and must not have moved.
+        assert page._rows["BC250_CPU_OC_VID"].get_adjustment().get_upper() == \
+            settings.limits["vid_safe_max"]
+
+    def test_the_cpu_lock_does_not_lift_the_gpu_rows(self, ui):
+        window, catalog, settings = ui
+        page = SettingsPage(window)
+        page.update(settings, catalog)
+
+        page._rows["BC250_ALLOW_EXTREME_VID"].set_active(True)
+
+        assert page._rows["BC250_GOV_VOLT_MAX"].get_adjustment().get_upper() == \
+            settings.limits["gpu_volt_safe_max"]
+
+    def test_dropping_a_lock_drags_the_value_back_under_the_ceiling(self, ui):
+        window, catalog, settings = ui
+        page = SettingsPage(window)
+        page.update(settings, catalog)
+
+        page._rows["BC250_ALLOW_EXTREME_GPU_VOLT"].set_active(True)
+        page._rows["BC250_GOV_VOLT_MAX"].set_value(1140)
+        page._rows["BC250_ALLOW_EXTREME_GPU_VOLT"].set_active(False)
+
+        # Leaving 1140 in the form would hand the engine a value it refuses.
+        assert page._rows["BC250_GOV_VOLT_MAX"].get_value() <= \
+            settings.limits["gpu_volt_safe_max"]
+
     def test_nothing_is_pending_until_something_is_edited(self, ui):
         window, catalog, settings = ui
         page = SettingsPage(window)
@@ -191,6 +237,20 @@ class TestMonitor:
         page._poll()
 
         assert page.fan_rpm._value.get_label() == "indisponible"
+
+    def test_a_temperature_past_the_documented_ceiling_is_marked(self, ui):
+        window, catalog, settings = ui
+        page = MonitorPage(window)
+
+        page.gpu_temp.set(71)
+        assert not page.gpu_temp._value.has_css_class("reading-hot")
+
+        # 85 °C is where the documentation puts the APU ceiling.
+        page.gpu_temp.set(87)
+        assert page.gpu_temp._value.has_css_class("reading-hot")
+
+        page.gpu_temp.set(60)
+        assert not page.gpu_temp._value.has_css_class("reading-hot")
 
     def test_a_note_explains_what_cannot_be_measured(self, ui):
         window, catalog, settings = ui

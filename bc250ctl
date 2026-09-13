@@ -370,20 +370,16 @@ cmd_resume() {
 
 # --------------------------------------------------------------- doctor ----
 
-# _version_lt <a> <b> — true when version a sorts before b.
-_version_lt() { [[ $1 != "$2" ]] && [[ $(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1) == "$1" ]]; }
-
-# _version_in_range <v> <lo> <hi> — inclusive.
-_version_in_range() {
-	local v=$1 lo=$2 hi=$3
-	_version_lt "$v" "$lo" && return 1
-	_version_lt "$hi" "$v" && return 1
-	return 0
-}
-
 # Kernel releases known to break the BC-250's GPU.
 KNOWN_BAD_KERNELS=('6.15.0:6.15.6' '6.17.8:6.17.10')
+RECOMMENDED_KERNEL='6.18.18'
 MESA_MINIMUM='25.1.0'
+MESA_RECOMMENDED='25.3.0'
+# The DisplayPort audio clock bug — the firmware programs the audio DTO for a
+# 728.631 MHz reference when the board actually runs at 600 MHz, so sound
+# comes out at 82.3% speed or not at all through an active adapter — was
+# fixed upstream here.
+DP_AUDIO_FIXED_IN='6.19.10'
 
 _doctor_kernel_guard() {
 	local release version range
@@ -393,11 +389,31 @@ _doctor_kernel_guard() {
 	for range in "${KNOWN_BAD_KERNELS[@]}"; do
 		if _version_in_range "$version" "${range%%:*}" "${range##*:}"; then
 			log_warn "kernel $release is in a range known to break the BC-250 GPU" \
-			         "(${range%%:*} to ${range##*:}). Roll back or move forward before tuning anything."
+			         "(${range%%:*} to ${range##*:}). Roll back or move to" \
+			         "${RECOMMENDED_KERNEL} LTS before tuning anything."
 			return 1
 		fi
 	done
 	return 0
+}
+
+# The DisplayPort audio fix landed upstream; below that kernel it is a real
+# problem with no software fix short of a watcher service, and a passive
+# adapter or a USB DAC sidesteps it entirely.
+_doctor_dp_audio_guard() {
+	local release version
+	release=$(uname -r)
+	version=${release%%-*}
+	version=${version%%+*}
+
+	if _version_lt "$version" "$DP_AUDIO_FIXED_IN"; then
+		printf 'DP audio        kernel %s predates the fix (%s): sound through an\n' \
+			"$version" "$DP_AUDIO_FIXED_IN"
+		printf '                active DP-HDMI adapter plays at 82%%%% speed or not at all.\n'
+		printf '                A passive adapter or a USB DAC avoids it.\n'
+		return 1
+	fi
+	printf 'DP audio        kernel carries the clock fix\n'
 }
 
 # _mesa_version — best effort; prints nothing when it cannot tell.
@@ -420,8 +436,14 @@ _doctor_mesa_guard() {
 		return 0
 	fi
 	if _version_lt "$v" "$MESA_MINIMUM"; then
-		printf 'mesa            %s — TOO OLD, %s or newer is required\n' "$v" "$MESA_MINIMUM"
+		printf 'mesa            %s — TOO OLD, %s or newer is required for gfx1013\n' \
+			"$v" "$MESA_MINIMUM"
 		return 1
+	fi
+	if _version_lt "$v" "$MESA_RECOMMENDED"; then
+		printf 'mesa            %s — works, but %s or newer is recommended\n' \
+			"$v" "$MESA_RECOMMENDED"
+		return 0
 	fi
 	printf 'mesa            %s\n' "$v"
 }
@@ -446,6 +468,7 @@ cmd_doctor() {
 	printf 'kernel          %s\n' "$(uname -r)"
 	_doctor_mesa_guard || true
 	_doctor_iommu_guard || true
+	_doctor_dp_audio_guard || true
 	printf 'umr             %s\n' "$(hw_has_umr && command -v umr || echo 'not installed')"
 	printf 'cpupower        %s\n' "$(command -v cpupower || echo 'not installed')"
 	printf 'python3         %s\n' "$(command -v python3 || echo 'not installed')"
@@ -480,7 +503,14 @@ cmd_doctor() {
 	fi
 
 	printf '\n'
-	_doctor_kernel_guard && log_ok "no known-bad kernel, Mesa or IOMMU problem"
+	if _doctor_kernel_guard; then
+		log_ok "no known-bad kernel, Mesa or IOMMU problem"
+	fi
+
+	# doctor always succeeds. It reports findings; a warning is not a failed
+	# command, and a non-zero exit here would be indistinguishable from the
+	# tool itself being broken — which is the one thing you run it to rule out.
+	return 0
 }
 
 # -------------------------------------------------------------- sources ----

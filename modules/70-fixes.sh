@@ -11,7 +11,10 @@
 #   suspend  s2idle is broken: the board goes to sleep and does not come
 #            back. Leaving suspend enabled is a trap, not a feature.
 #   zram     Compressed swap has been implicated in game crashes (RDR2,
-#            Company of Heroes 3).
+#            Company of Heroes 3). Turning it off is only half the job: a
+#            board with no swap at all is worse off than one with zram, so
+#            this module says so, and BC250_KARGS_ZSWAP plus a swap file are
+#            the documented replacement.
 #
 # The other well-known annoyance — MangoHud and radeontop reporting GPU usage
 # in the hundreds of percent — is not handled here: `fix-metrics = true` in the
@@ -21,6 +24,7 @@ HHD_UNIT='hhd'
 SLEEP_TARGETS=(sleep.target suspend.target hibernate.target hybrid-sleep.target)
 # The unit name depends on which zram generator the image ships.
 ZRAM_UNITS=(swap-create@zram0.service systemd-zram-setup@zram0.service zram-swap.service)
+SYSCTL_FILE_NAME='99-bc250ctl.conf'
 
 mod_describe()    { printf 'correctifs de la carte (saccades hhd, veille cassée, plantages ZRAM)\n'; }
 mod_requires()    { :; }
@@ -31,6 +35,15 @@ mod_unattended()  { return 0; }
 mod_risk()        { printf 'low\n'; }
 mod_needs_smu()   { return 1; }
 mod_upstream()    { :; }
+
+_sysctl_file() { printf '%s\n' "${BC250_PREFIX}/etc/sysctl.d/${SYSCTL_FILE_NAME}"; }
+
+# _has_swap — true when the kernel has somewhere to swap to.
+_has_swap() {
+	local procswaps="${BC250_PREFIX}/proc/swaps"
+	[[ -r $procswaps ]] || return 0     # cannot tell; do not cry wolf
+	[[ $(sed -n '2p' -- "$procswaps") ]]
+}
 
 _unit_known() { systemctl list-unit-files 2>/dev/null | grep -q "^${1}"; }
 _is_masked()  { systemctl is-enabled "$1" 2>/dev/null | grep -q masked; }
@@ -66,10 +79,16 @@ _zram_done() {
 mod_active() {
 	_is_masked "$HHD_UNIT" && return 0
 	_is_masked sleep.target && return 0
+	[[ -f $(_sysctl_file) ]] && return 0
 	return 1
 }
 
-mod_detect() { _hhd_done && _suspend_done && _zram_done; }
+_swappiness_done() {
+	[[ ${BC250_SWAPPINESS:-auto} == auto ]] && return 0
+	[[ -f $(_sysctl_file) ]]
+}
+
+mod_detect() { _hhd_done && _suspend_done && _zram_done && _swappiness_done; }
 
 mod_status() {
 	local out=()
@@ -89,6 +108,7 @@ mod_status() {
 		else                              out+=('zram à faire')
 		fi
 	fi
+	[[ ${BC250_SWAPPINESS:-auto} != auto ]] && out+=("swappiness ${BC250_SWAPPINESS}")
 
 	if (( ${#out[@]} == 0 )); then
 		printf 'aucun correctif demandé\n'
@@ -104,6 +124,7 @@ mod_install() {
 	_fix_hhd
 	_fix_suspend
 	_fix_zram
+	_fix_swappiness
 }
 
 mod_configure() { mod_install; }
@@ -141,6 +162,34 @@ _fix_zram() {
 
 	log_info "disabling $u (implicated in game crashes on this board)"
 	bc_run systemctl disable --now "$u" || log_warn "could not disable $u"
+
+	# Leaving the board with no swap at all trades one crash for another.
+	if ! _has_swap; then
+		log_warn "plus aucun espace de swap sur cette machine." \
+		         "La documentation amont recommande un fichier de swap sur disque" \
+		         "avec zswap (BC250_KARGS_ZSWAP=1) plutôt que ZRAM."
+	fi
+}
+
+_fix_swappiness() {
+	local value=${BC250_SWAPPINESS:-auto}
+
+	if [[ $value == auto ]]; then
+		if [[ -f $(_sysctl_file) ]]; then
+			log_info "suppression de notre réglage de swappiness"
+			bc_run rm -f -- "$(_sysctl_file)"
+		fi
+		return 0
+	fi
+
+	write_file "$(_sysctl_file)" 0644 <<-EOC
+		# Managed by bc250ctl. 180 is what the upstream documentation pairs
+		# with zswap: swapping out early is cheap when the pages land in
+		# compressed RAM first.
+		vm.swappiness = ${value}
+	EOC
+	bc_run sysctl -q -w "vm.swappiness=${value}" ||
+		log_warn "swappiness appliquée au prochain démarrage seulement"
 }
 
 mod_verify() {
@@ -160,8 +209,21 @@ mod_verify() {
 	fi
 
 	if [[ ${BC250_DISABLE_ZRAM:-0} == 1 ]]; then
-		if _zram_done; then log_ok "zram swap is off"
-		else log_error "zram swap is still enabled"; rc=1
+		if _zram_done; then
+			log_ok "zram swap is off"
+			_has_swap || log_warn "et il ne reste aucun espace de swap ; voir docs/modules.md"
+		else
+			log_error "zram swap is still enabled"
+			rc=1
+		fi
+	fi
+
+	if [[ ${BC250_SWAPPINESS:-auto} != auto ]]; then
+		if [[ -f $(_sysctl_file) ]]; then
+			log_ok "swappiness fixée à ${BC250_SWAPPINESS}"
+		else
+			log_error "le réglage de swappiness est absent"
+			rc=1
 		fi
 	fi
 
@@ -181,5 +243,6 @@ mod_uninstall() {
 	if u=$(_zram_unit); then
 		bc_run systemctl enable "$u" || true
 	fi
+	[[ -f $(_sysctl_file) ]] && bc_run rm -f -- "$(_sysctl_file)"
 	return 0
 }

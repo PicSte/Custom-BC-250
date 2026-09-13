@@ -83,7 +83,7 @@ avec cairo, précisément pour ne pas dépendre d'un paquet de plus.
 ## Développement
 
 ```sh
-xvfb-run -a python3 -m pytest gui/tests/ -q
+xvfb-run -a python3 -m pytest gui/tests/ -q      # 55 tests
 ```
 
 Les tests pilotent le **vrai** `bc250ctl` dans un préfixe bac à sable, avec les
@@ -97,8 +97,9 @@ prendre du retard sur le moteur :
 - le formulaire généré est comparé à la liste des réglages publiés par
   `config --json` — un réglage ajouté au moteur et absent de l'UI fait échouer
   la suite ;
-- le plafond proposé par le curseur de tension est comparé à celui que le
-  moteur applique.
+- les plafonds proposés par les curseurs de tension sont comparés à ceux que le
+  moteur applique, et un test vérifie que chaque réglage plafonné de l'interface
+  existe encore dans le schéma.
 
 `BC250CTL=/chemin/vers/bc250ctl` force le moteur utilisé ; sinon l'app prend
 celui du dépôt s'il est à côté, puis celui du `PATH`.

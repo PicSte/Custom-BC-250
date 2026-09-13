@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Mock uname: only `uname -r` is overridden, and only when a test asked for a
+# particular kernel. Everything else falls through to the real thing.
+set -euo pipefail
+: "${MOCK_STATE:?}"
+if [[ ${1:-} == -r && -f $MOCK_STATE/uname-r ]]; then
+	cat "$MOCK_STATE/uname-r"
+	exit 0
+fi
+exec /usr/bin/uname "$@"

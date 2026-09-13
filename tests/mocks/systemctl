@@ -17,7 +17,11 @@ unit=${args[0]:-}
 
 case $cmd in
 	daemon-reload) ;;
-	enable)  add "$ENABLED" "$unit"; [[ " $* " == *" --now "* ]] && add "$ACTIVE" "$unit" ;;
+	enable)
+		add "$ENABLED" "$unit"
+		# Careful: ending a branch on a failing test would exit under set -e
+		# and make every plain `enable` look like a failure.
+		if [[ " $* " == *" --now "* ]]; then add "$ACTIVE" "$unit"; fi ;;
 	disable) del "$ENABLED" "$unit"; del "$ACTIVE" "$unit" ;;
 	mask)    add "$MASKED" "$unit"; del "$ENABLED" "$unit"; del "$ACTIVE" "$unit" ;;
 	unmask)  del "$MASKED" "$unit" ;;

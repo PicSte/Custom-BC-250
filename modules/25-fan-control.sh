@@ -113,6 +113,10 @@ mod_configure() {
 		# Managed by bc250ctl. The BC-250's chip is not on the driver's
 		# allow-list, so binding has to be forced.
 		options ${FAN_MODULE} force=true
+
+		# One driver per chip. Removing the read-only drop-in is not enough:
+		# nct6683 is in-tree and would otherwise be free to bind first.
+		blacklist nct6683
 	EOC
 
 	if ! lsmod 2>/dev/null | grep -q "^${FAN_MODULE}\b"; then

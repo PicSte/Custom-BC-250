@@ -14,7 +14,7 @@ def test_the_catalogue_is_read_whole(engine, profile):
     catalog = load(engine)
     assert catalog.profile == "balanced"
     assert catalog.hardware.bc250 and catalog.hardware.gpu_card == "card1"
-    assert len(catalog.modules) == 9
+    assert len(catalog.modules) == 10
 
 
 def test_modules_resolve_by_either_name(engine, profile):
@@ -145,6 +145,39 @@ class TestSettings:
         assert vid.maximum == 1325
         assert settings.effective_maximum(vid) == 1275
         assert settings.effective_maximum(vid, unlocked=True) == 1325
+
+    def test_the_gpu_voltage_has_its_own_pair_of_ceilings(self, engine, profile):
+        profile("balanced")
+        settings = Settings.from_json(engine.config())
+        volt = settings.get("BC250_GOV_VOLT_MAX")
+
+        assert settings.effective_maximum(volt) == 1100
+        assert settings.effective_maximum(volt, unlocked=True) == 1150
+
+    def test_each_capped_setting_names_the_flag_that_lifts_it(self, engine, profile):
+        from bc250_gui.model import lock_key
+
+        profile("balanced")
+        settings = Settings.from_json(engine.config())
+
+        assert lock_key(settings.get("BC250_CPU_OC_VID")) == "BC250_ALLOW_EXTREME_VID"
+        assert lock_key(settings.get("BC250_GOV_VOLT_MAX")) == "BC250_ALLOW_EXTREME_GPU_VOLT"
+        assert lock_key(settings.get("BC250_GOV_FREQ_MAX")) is None
+
+    def test_every_capped_setting_and_its_flag_exist_in_the_schema(self, engine, profile):
+        from bc250_gui.model import CAPPED_SETTINGS
+
+        profile("balanced")
+        settings = Settings.from_json(engine.config())
+        keys = {s.key for s in settings.schema}
+
+        # A table in the interface that names a setting the engine no longer
+        # has would silently stop capping anything.
+        for key, (flag, safe, absolute) in CAPPED_SETTINGS.items():
+            assert key in keys, key
+            assert flag in keys, flag
+            assert safe in settings.limits, safe
+            assert absolute in settings.limits, absolute
 
     def test_other_settings_are_not_affected_by_that_rule(self, engine, profile):
         profile("max")

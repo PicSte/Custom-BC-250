@@ -35,6 +35,7 @@ sudo bc250ctl install acpi
 sudo systemctl reboot
 cpupower -c all idle-info | grep -c 'Number of idle states: 0'   # attendu : 0
 cpupower frequency-info                                          # P-states 800-3200 MHz
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor         # attendu : schedutil
 
 # 5. Les 40 CU
 sudo bc250ctl install gpu-cu
@@ -93,6 +94,15 @@ BC250_GPU_WGP_LAYOUT=1.0.3                  # 38 CU au lieu de 40
 ```
 
 puis `sudo bc250ctl configure gpu-cu`.
+
+## Vérifier la mémoire et le swap
+
+```sh
+cat /proc/cmdline | tr ' ' '\n' | grep -E 'ttm|gttsize|zswap'
+cat /etc/drirc                               # option radv_enable_unified_heap_on_apu
+swapon --show                                # il doit rester un espace de swap
+cat /proc/sys/vm/swappiness
+```
 
 ## Vérifier le verrou SMU
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from gi.repository import Adw, Gtk
 
-from bc250_gui.model import Catalog, Setting, Settings
+from bc250_gui.model import CAPPED_SETTINGS, Catalog, Setting, Settings, lock_key
 from bc250_gui.widgets.action import ActionDialog
 
 #: A setting's module id maps to the group it is shown under.
@@ -29,8 +29,8 @@ GROUP_TITLE = {
     "70-fixes": "Correctifs",
 }
 
-VID_KEY = "BC250_CPU_OC_VID"
-UNLOCK_KEY = "BC250_ALLOW_EXTREME_VID"
+#: The flags that lift a ceiling; changing one has to re-bound its rows.
+UNLOCK_KEYS = {flag for flag, _safe, _absolute in CAPPED_SETTINGS.values()}
 
 
 class SettingsPage(Gtk.Box):
@@ -114,7 +114,7 @@ class SettingsPage(Gtk.Box):
         They get a switch that turns the number on, so the off state stays
         reachable without typing a magic value.
         """
-        maximum = self._settings.effective_maximum(setting, self._unlocked())
+        maximum = self._settings.effective_maximum(setting, self._unlocked(setting))
         minimum = setting.minimum or 0
 
         off_value = "0" if setting.type == "int0" else "auto"
@@ -136,17 +136,18 @@ class SettingsPage(Gtk.Box):
         row.connect("notify::value", self._on_number, setting)
         return row
 
-    def _unlocked(self) -> bool:
-        return self._edited.get(UNLOCK_KEY, "0") == "1"
+    def _unlocked(self, setting: Setting) -> bool:
+        flag = lock_key(setting)
+        return flag is not None and self._edited.get(flag, "0") == "1"
 
     # ------------------------------------------------------------ edits --
 
     def _set(self, key: str, value: str) -> None:
         self._edited[key] = value
-        # Lifting the voltage lock changes what the voltage row may offer, so
-        # the form has to be rebuilt rather than left showing a stale ceiling.
-        if key == UNLOCK_KEY:
-            self._rebuild_vid_row()
+        # Lifting a voltage lock changes what its rows may offer, so they have
+        # to be re-bounded rather than left showing a stale ceiling.
+        if key in UNLOCK_KEYS:
+            self._rebound_capped_rows(key)
         self._refresh_buttons()
 
     def _on_bool(self, row, _param, setting: Setting) -> None:
@@ -172,14 +173,23 @@ class SettingsPage(Gtk.Box):
         else:
             self._set(setting.key, "0" if setting.type == "int0" else "auto")
 
-    def _rebuild_vid_row(self) -> None:
-        row = self._rows.get(VID_KEY)
-        setting = self._settings.get(VID_KEY) if self._settings else None
-        if row is None or setting is None:
+    def _rebound_capped_rows(self, flag: str) -> None:
+        """Re-apply the ceilings the given lock controls."""
+        if self._settings is None:
             return
-        maximum = self._settings.effective_maximum(setting, self._unlocked())
-        if maximum is not None:
+        for key, (owner, _safe, _absolute) in CAPPED_SETTINGS.items():
+            if owner != flag:
+                continue
+            row = self._rows.get(key)
+            setting = self._settings.get(key)
+            if row is None or setting is None:
+                continue
+            maximum = self._settings.effective_maximum(setting, self._unlocked(setting))
+            if maximum is None:
+                continue
             row.get_adjustment().set_upper(maximum)
+            # Lowering a ceiling has to drag the value down with it, or the
+            # form would hold a number the engine is about to reject.
             if row.get_value() > maximum:
                 row.set_value(maximum)
 

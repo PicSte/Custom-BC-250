@@ -75,9 +75,10 @@ class Sparkline(Gtk.Widget):
 class Reading(Gtk.Box):
     """One value, with its recent history under it."""
 
-    def __init__(self, title: str, unit: str, ceiling: float):
+    def __init__(self, title: str, unit: str, ceiling: float, warn_above: float | None = None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.unit = unit
+        self.warn_above = warn_above
 
         self._title = Gtk.Label(label=title, xalign=0)
         self._title.add_css_class("dim-label")
@@ -100,6 +101,14 @@ class Reading(Gtk.Box):
             return
         self._value.remove_css_class("dim-label")
         self._value.set_label(f"{value:g} {self.unit}".strip())
+
+        # Say when a reading is past the point the documentation calls safe,
+        # rather than leaving the number to be read against nothing.
+        if self.warn_above is not None and value >= self.warn_above:
+            self._value.add_css_class("reading-hot")
+        else:
+            self._value.remove_css_class("reading-hot")
+
         self._chart.push(value)
 
 
@@ -109,10 +118,11 @@ class MonitorPage(Gtk.Box):
         self.window = window
         self._timer: int | None = None
 
-        self.gpu_temp = Reading("Température GPU", "°C", 100)
+        # 85 °C is where the BC-250 documentation puts the APU ceiling.
+        self.gpu_temp = Reading("Température GPU", "°C", 100, warn_above=85)
         self.gpu_clock = Reading("Fréquence GPU", "MHz", 2000)
         self.gpu_power = Reading("Puissance GPU", "W", 200)
-        self.cpu_temp = Reading("Température CPU", "°C", 100)
+        self.cpu_temp = Reading("Température CPU", "°C", 100, warn_above=90)
         self.fan_rpm = Reading("Ventilateur", "tr/min", 5000)
         self.gpu_busy = Reading("Charge GPU", "%", 100)
 

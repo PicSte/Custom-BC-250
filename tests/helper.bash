@@ -169,3 +169,17 @@ fake_hwmon() {
 	echo "$driver" >"$dir/name"
 	echo "$value" >"$dir/$file"
 }
+
+# fake_kernel <release> — what `uname -r` reports, for the version guards.
+fake_kernel() { printf '%s\n' "$1" >"$MOCK_STATE/uname-r"; }
+
+# fake_swap — make /proc/swaps show an active swap device.
+fake_swap() {
+	printf 'Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n' >"$BC250_PREFIX/proc/swaps"
+	printf '/swapfile\t\t\t\tfile\t\t16777212\t0\t-2\n' >>"$BC250_PREFIX/proc/swaps"
+}
+
+# no_swap — an empty swap table, which is what disabling zram can leave.
+no_swap() {
+	printf 'Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n' >"$BC250_PREFIX/proc/swaps"
+}

@@ -94,3 +94,60 @@ grub_conf() { echo "$BC250_PREFIX/etc/default/grub"; }
 	run bash -c "grep '^BC250_ACPI=' '$BC250_PREFIX/etc/bc250ctl/config.env'"
 	[ "$output" = "BC250_ACPI=1" ]
 }
+
+@test "the CPU governor is installed with the tables that make it possible" {
+	bc250ctl install acpi
+
+	local unit="$BC250_PREFIX/etc/systemd/system/bc250ctl-cpu-governor.service"
+	[ -f "$unit" ]
+	grep -q 'bc250ctl-cpu-governor schedutil' "$unit"
+	[ -x "$BC250_PREFIX/usr/local/bin/bc250ctl-cpu-governor" ]
+	grep -qx bc250ctl-cpu-governor.service "$MOCK_STATE/units-enabled"
+}
+
+@test "the governor choice from the profile is the one installed" {
+	write_config <<-EOC
+		BC250_ACPI=1
+		BC250_CPU_GOVERNOR=performance
+		BC250_SENSORS=0
+	EOC
+	bc250ctl install acpi
+	grep -q 'bc250ctl-cpu-governor performance' \
+		"$BC250_PREFIX/etc/systemd/system/bc250ctl-cpu-governor.service"
+}
+
+@test "none leaves the governor to the system" {
+	bc250ctl install acpi
+	[ -f "$BC250_PREFIX/etc/systemd/system/bc250ctl-cpu-governor.service" ]
+
+	write_config <<-EOC
+		BC250_ACPI=1
+		BC250_CPU_GOVERNOR=none
+		BC250_SENSORS=0
+	EOC
+	bc250ctl install acpi
+	[ ! -f "$BC250_PREFIX/etc/systemd/system/bc250ctl-cpu-governor.service" ]
+}
+
+@test "the governor script refuses a governor the kernel does not offer" {
+	bc250ctl install acpi
+	run "$BC250_PREFIX/usr/local/bin/bc250ctl-cpu-governor" nonsense
+	[ "$status" -ne 0 ]
+}
+
+@test "revert takes the governor unit away too" {
+	bc250ctl install acpi
+	bc250ctl revert acpi
+	[ ! -f "$BC250_PREFIX/etc/systemd/system/bc250ctl-cpu-governor.service" ]
+	[ ! -f "$BC250_PREFIX/usr/local/bin/bc250ctl-cpu-governor" ]
+}
+
+@test "verify complains when the governor unit is missing" {
+	bc250ctl install acpi
+	acpi_tables_loaded
+	rm -f "$BC250_PREFIX/etc/systemd/system/bc250ctl-cpu-governor.service"
+
+	run bc250ctl verify acpi
+	[ "$status" -ne 0 ]
+	[[ $output == *"governor CPU"* ]]
+}

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Mock sysctl: records the call, never touches the running kernel.
+set -euo pipefail
+: "${MOCK_STATE:?}"
+echo "sysctl $*" >>"$MOCK_STATE/calls"

@@ -81,3 +81,38 @@ setup() { sandbox_setup; lib_source; }
 	run config_validate
 	[ "$status" -ne 0 ]
 }
+
+@test "GPU voltage above the safe ceiling needs its own opt-in" {
+	BC250_GOV_VOLT_MAX=1120
+	run config_validate
+	[ "$status" -ne 0 ]
+	[[ $output == *"1100"* ]]
+	[[ $output == *BC250_ALLOW_EXTREME_GPU_VOLT* ]]
+
+	BC250_ALLOW_EXTREME_GPU_VOLT=1
+	run config_validate
+	[ "$status" -eq 0 ]
+}
+
+@test "GPU voltage above the absolute maximum is refused whatever the flag" {
+	BC250_GOV_VOLT_MAX=1160 BC250_ALLOW_EXTREME_GPU_VOLT=1
+	run config_validate
+	[ "$status" -ne 0 ]
+	[[ $output == *"1150"* ]]
+	[[ $output == *"not overridable"* ]]
+}
+
+@test "the CPU override does not unlock the GPU ceiling" {
+	# Two different budgets; one flag must not lift the other's limit.
+	BC250_GOV_VOLT_MAX=1120 BC250_ALLOW_EXTREME_VID=1
+	run config_validate
+	[ "$status" -ne 0 ]
+	[[ $output == *BC250_ALLOW_EXTREME_GPU_VOLT* ]]
+}
+
+@test "the GPU floor is checked too, not just the ceiling" {
+	BC250_GOV_VOLT_MIN=1120 BC250_GOV_VOLT_MAX=1120
+	run config_validate
+	[ "$status" -ne 0 ]
+	[[ $output == *BC250_GOV_VOLT_MIN* ]]
+}

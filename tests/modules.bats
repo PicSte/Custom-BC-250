@@ -14,11 +14,12 @@ setup() { sandbox_setup; lib_source; }
 	[ "${lines[2]}" = 20-sensors ]
 	[ "${lines[3]}" = 25-fan-control ]
 	[ "${lines[4]}" = 30-governor ]
-	[ "${lines[5]}" = 40-gpu-cu ]
-	[ "${lines[6]}" = 50-cpu-cores ]
-	[ "${lines[7]}" = 60-cpu-oc ]
-	[ "${lines[8]}" = 70-fixes ]
-	[ "${#lines[@]}" -eq 9 ]
+	[ "${lines[5]}" = 35-radv ]
+	[ "${lines[6]}" = 40-gpu-cu ]
+	[ "${lines[7]}" = 50-cpu-cores ]
+	[ "${lines[8]}" = 60-cpu-oc ]
+	[ "${lines[9]}" = 70-fixes ]
+	[ "${#lines[@]}" -eq 10 ]
 }
 
 @test "the ACPI tables are ordered before the core unlock that needs them" {

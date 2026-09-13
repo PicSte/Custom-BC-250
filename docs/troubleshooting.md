@@ -74,6 +74,39 @@ ls -l /boot/SSDT_ACPI.cpio                   # l'archive aussi
 ujust regenerate-grub
 ```
 
+## Le son est lent, désaccordé, ou absent en DisplayPort
+
+Bug de firmware : l'horloge audio est programmée pour une référence à 728,631 MHz alors
+que la carte tourne à 600 MHz, donc tout sort à 82,3 % de vitesse — et souvent pas du
+tout à travers un adaptateur **actif** DP→HDMI.
+
+```sh
+sudo bc250ctl doctor | grep "DP audio"
+```
+
+Corrigé en amont dans **Linux 6.19.10+**. En dessous, les seules réponses fiables sont
+un adaptateur **passif** (qui emprunte un autre chemin d'horloge) ou un DAC USB.
+
+## Plus de swap du tout après avoir désactivé ZRAM
+
+C'est le piège de ne faire que la moitié du correctif : couper ZRAM sans rien mettre à
+la place échange un plantage contre un autre.
+
+```sh
+swapon --show          # vide ?
+```
+
+La réponse documentée est zswap adossé à un fichier de swap disque :
+
+```sh
+sudo fallocate -l 16G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+# puis rendre-le permanent dans /etc/fstab
+```
+
+puis dans `/etc/bc250ctl/config.env` : `BC250_KARGS_ZSWAP=1` et `BC250_SWAPPINESS=180`,
+et `sudo bc250ctl install kargs fixes`.
+
 ## Les ventilateurs ne réagissent pas
 
 `nct6683` ne sait que lire. Pour piloter le PWM il faut `nct6687`, et les deux ne peuvent
@@ -149,6 +182,19 @@ Après le déblocage des huit cœurs, `pp_dpm_sclk` remonte des valeurs fausses.
 défaut de remontée connu, pas une panne du governor : `bc250ctl verify governor` le
 signale et ne le compte pas comme un échec. Lisez les fréquences avec `amdgpu_top` ou
 `nvtop`.
+
+## Le CPU reste à une seule fréquence
+
+Sans les tables ACPI reconstruites, la carte n'a aucun `cpufreq`. Avec elles mais sans
+governor, c'est le défaut du noyau qui s'applique.
+
+```sh
+cpupower frequency-info                        # des P-states apparaissent ?
+systemctl status bc250ctl-cpu-governor.service
+cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+```
+
+`sudo bc250ctl install acpi` pose les deux.
 
 ## Erreur `this needs root`
 

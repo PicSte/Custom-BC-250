@@ -21,7 +21,10 @@ est ce que la GUI pourra piloter.
 | Micro-saccades `hhd` | — | `fixes` |
 | Veille cassée | — | `fixes` |
 | ZRAM et plantages de jeux | — | `fixes` |
-| Versions noyau / Mesa / IOMMU | — | `doctor` (diagnostic seul) |
+| Configuration RADV | `/etc/drirc` | `radv` |
+| Governor CPU | — | `acpi` |
+| zswap et swappiness | — | `kargs`, `fixes` |
+| Versions noyau / Mesa / IOMMU / audio DP | — | `doctor` (diagnostic seul) |
 
 ## Non géré, et la raison
 
@@ -55,6 +58,23 @@ met à jour souvent. On garde la voie runtime.
 **SkillFishOS** — une distribution complète pour la BC-250. C'est une alternative à
 Bazzite, pas un outil à intégrer.
 
+**[`simpmix/bc250-encoding-decoding-fix`](https://github.com/simpmix/bc250-encoding-decoding-fix)**
+— pilote VA-API qui fait l'encodage H.264 en shaders de calcul Vulkan. La carte n'a pas
+de firmware VCN, donc ce n'est pas un correctif mais une **capacité nouvelle** : de
+l'encodage matériel là où il n'y en avait aucun. Sérieux candidat si tu streames
+(Sunshine, OBS). Pas encore géré parce qu'il remplace un pilote graphique et mérite
+d'être évalué sur matériel avant d'être proposé.
+
+**`rpf16rj/bc250-steamos-real-toolkit`** — équivalent pour SteamOS. Même terrain,
+autre distribution.
+
+**Le correctif d'horloge audio DisplayPort** — le firmware programme le DTO audio pour
+une référence à 728,631 MHz alors que la carte tourne à 600 MHz : le son sort à 82,3 %
+de sa vitesse, ou pas du tout à travers un adaptateur actif. **Corrigé en amont dans
+Linux 6.19.10+.** En dessous, il faudrait un service qui réécrit le registre après
+chaque modeset. `doctor` signale le cas ; on ne gère pas le contournement parce que la
+vraie réponse est un noyau à jour, un adaptateur passif ou un DAC USB.
+
 **`nvtop`, `amdgpu_top`, `radeontop`** — de la supervision. C'est précisément ce que
 l'interface graphique fera elle-même ; en faire des modules reviendrait à installer des
 outils pour afficher ce que la GUI affiche déjà.
@@ -66,6 +86,22 @@ configuration système.
 mentionne, l'outil ne peut rien en faire.
 
 ## Ce que l'inventaire a corrigé
+
+### Deuxième passe, sur la documentation complète
+
+Une relecture des 39 pages de [`amd-bc250-docs`](https://elektricm.github.io/amd-bc250-docs/)
+a mis au jour un défaut de sécurité chez nous et trois manques :
+
+1. **Le plafond de tension GPU était trop haut.** Notre schéma autorisait 1200 mV alors
+   que la documentation fixe l'usage courant à 1100 mV et le maximum absolu à 1150 mV.
+   On avait soigné les garde-fous CPU et laissé passer le GPU.
+2. **Aucun governor CPU** n'était posé après le correctif ACPI : on installait la
+   capacité `cpufreq` sans jamais s'en servir.
+3. **Le correctif ZRAM était incomplet** : on coupait le swap compressé sans rien mettre
+   à la place, ce qui laisse la carte sans swap du tout.
+4. **`/etc/drirc` et `amdgpu.gttsize`** manquaient, tous deux pour la mémoire partagée.
+
+### Première passe, sur le graphe de dépendances
 
 Deux défauts dans la première version, trouvés en établissant le graphe :
 

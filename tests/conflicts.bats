@@ -117,3 +117,12 @@ fan_profile() {
 	bc250ctl install fan-control
 	[ ! -f "$BC250_PREFIX/etc/systemd/system/bc250ctl-fan.service" ]
 }
+
+@test "the read-only driver is blacklisted, not merely unconfigured" {
+	fan_profile
+	bc250ctl install fan-control
+
+	# Removing our drop-in is not enough: nct6683 is in-tree and would be
+	# free to bind first.
+	grep -q '^blacklist nct6683$' "$BC250_PREFIX/etc/modprobe.d/99-bc250-fan.conf"
+}

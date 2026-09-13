@@ -24,23 +24,34 @@
 # the same chip, eight cores without the ACPI tables — are not expressible as
 # a table and stay written out in config_validate.
 
-# Hard safety ceilings for CPU core voltage, in millivolts.
+# Hard safety ceilings, in millivolts. The rows below build their ranges from
+# these, so there is one place to change them.
 #
-# 1325 mV is the absolute limit documented by bc250_smu_oc (bc250_limits.py);
-# above it you damage the SoC. 1275 mV is the ceiling this tool applies on its
-# own, leaving the last 50 mV behind an explicit opt-in. The rows below build
-# their ranges from these, so there is one place to change them.
+# CPU core voltage: 1325 mV is the absolute limit documented by bc250_smu_oc
+# (bc250_limits.py); above it you damage the SoC. 1275 mV is the ceiling this
+# tool applies on its own, leaving the last 50 mV behind an explicit opt-in.
 readonly VID_ABSOLUTE_MAX=1325
 readonly VID_SAFE_MAX=1275
 readonly VID_MIN=950
 readonly FREQ_MIN=3500
 readonly FREQ_MAX=4500
 
+# GPU voltage is a different budget with much lower limits: the BC-250
+# documentation puts general use at 1100 mV and calls 1150 mV the absolute
+# maximum. Same two-tier treatment as the CPU, because the consequence of
+# getting it wrong is the same.
+readonly GPU_VOLT_ABSOLUTE_MAX=1150
+readonly GPU_VOLT_SAFE_MAX=1100
+readonly GPU_VOLT_MIN=600
+
 BC250_SETTINGS=(
 	"BC250_PROFILE|choice|safe,balanced,max|safe|core|Profil|:|Jeu de réglages de départ"
 
 	"BC250_ACPI|bool||1|15-acpi|Tables ACPI reconstruites|:|C-states pour 16 threads et P-states. Obligatoire à 8 cœurs"
+	"BC250_CPU_GOVERNOR|choice|none,schedutil,performance,powersave,ondemand,conservative|schedutil|15-acpi|Governor CPU|:|Sans les tables ACPI il n'y a pas de cpufreq du tout. none laisse le réglage du système"
 	"BC250_KARGS_TTM|bool||1|10-kargs|Limites mémoire TTM|:|Sans elles les grosses allocations GPU échouent"
+	"BC250_TTM_PAGES_LIMIT|int|1000000-8000000|3959290|10-kargs|Plafond de pages TTM|pages|3959290 par défaut ; 3014656 convient mieux à un split VRAM de 512 Mo"
+	"BC250_KARGS_ZSWAP|bool||0|10-kargs|Activer zswap|:|Compression en RAM adossée au swap disque, à la place de ZRAM"
 	"BC250_KARGS_MITIGATIONS_OFF|bool||0|10-kargs|Désactiver les mitigations CPU|:|Gain de performance contre les protections canaux auxiliaires"
 	"BC250_KARGS_DP_FORCE|bool||0|10-kargs|Forcer la sortie DisplayPort|:|Pour un démarrage où l'écran n'est pas détecté"
 
@@ -50,10 +61,12 @@ BC250_SETTINGS=(
 
 	"BC250_GOV_FREQ_MIN|int|200-2000|1000|30-governor|Fréquence GPU minimale|MHz|"
 	"BC250_GOV_FREQ_MAX|int|200-2000|1500|30-governor|Fréquence GPU maximale|MHz|1500 MHz tient 83 °C et 125 W"
-	"BC250_GOV_VOLT_MIN|int|600-1200|900|30-governor|Tension GPU minimale|mV|"
-	"BC250_GOV_VOLT_MAX|int|600-1200|900|30-governor|Tension GPU maximale|mV|Coupe la courbe du governor à ce plafond"
+	"BC250_GOV_VOLT_MIN|int|${GPU_VOLT_MIN}-${GPU_VOLT_ABSOLUTE_MAX}|900|30-governor|Tension GPU minimale|mV|"
+	"BC250_GOV_VOLT_MAX|int|${GPU_VOLT_MIN}-${GPU_VOLT_ABSOLUTE_MAX}|900|30-governor|Tension GPU maximale|mV|Au-delà de ${GPU_VOLT_SAFE_MAX} mV il faut lever le verrou. ${GPU_VOLT_ABSOLUTE_MAX} mV est le maximum absolu"
+	"BC250_ALLOW_EXTREME_GPU_VOLT|bool||0|30-governor|Lever le plafond de ${GPU_VOLT_SAFE_MAX} mV (GPU)|:|Au-dessus, la carte plante sous charge plutôt que de tenir"
 
-	"BC250_GPU_WGP_LAYOUT|text||stock|40-gpu-cu|Routage des WGP|:|all pour 40 CU, stock d'origine, ou une liste SE.SH.WGP à laisser désactivée"
+	"BC250_GPU_WGP_LAYOUT|text||stock|40-gpu-cu|Routage des WGP|:|all pour 40 CU, stock pour le routage usine, ou une liste SE.SH.WGP à laisser désactivée"
+	"BC250_RADV_UNIFIED_HEAP|bool||1|35-radv|Tas mémoire unifié RADV|:|Adapte RADV à la mémoire partagée CPU/GPU de cette carte"
 
 	"BC250_CPU_CORES|choice|6,8|6|50-cpu-cores|Cœurs CPU|:|8 exige les tables ACPI. Une coupure d'alimentation remet 6"
 
@@ -65,14 +78,18 @@ BC250_SETTINGS=(
 	"BC250_DISABLE_HHD|bool||0|70-fixes|Masquer hhd|:|Micro-saccades de l'interface Deck"
 	"BC250_DISABLE_SUSPEND|bool||0|70-fixes|Désactiver la mise en veille|:|s2idle est cassé : la carte ne se réveille pas"
 	"BC250_DISABLE_ZRAM|bool||0|70-fixes|Désactiver le swap ZRAM|:|Mis en cause dans des plantages de jeux"
+	"BC250_SWAPPINESS|intauto|0-200|auto|70-fixes|Agressivité du swap|:|180 avec zswap, d'après la documentation amont. auto ne touche à rien"
 )
 
 # settings_limits_json — the ceilings the interface has to know about, so it
 # can stop a slider where the engine would refuse rather than showing a range
 # it will reject.
 settings_limits_json() {
-	printf '{"vid_safe_max": %s, "vid_absolute_max": %s, "vid_min": %s, "freq_min": %s, "freq_max": %s}' \
-		"$VID_SAFE_MAX" "$VID_ABSOLUTE_MAX" "$VID_MIN" "$FREQ_MIN" "$FREQ_MAX"
+	printf '{"vid_safe_max": %s, "vid_absolute_max": %s, "vid_min": %s' \
+		"$VID_SAFE_MAX" "$VID_ABSOLUTE_MAX" "$VID_MIN"
+	printf ', "freq_min": %s, "freq_max": %s' "$FREQ_MIN" "$FREQ_MAX"
+	printf ', "gpu_volt_safe_max": %s, "gpu_volt_absolute_max": %s}' \
+		"$GPU_VOLT_SAFE_MAX" "$GPU_VOLT_ABSOLUTE_MAX"
 }
 
 settings_keys() {

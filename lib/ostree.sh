@@ -92,6 +92,20 @@ ostree_karg_remove() {
 	done
 }
 
+# ostree_karg_remove_key <key>
+#
+# Removes whatever value a key currently holds. ostree_karg_remove needs the
+# exact string, which is no use for an argument whose value is configurable.
+ostree_karg_remove_key() {
+	local key=$1 karg
+	while IFS= read -r karg; do
+		[[ $karg == "$key="* ]] || continue
+		log_info "removing kernel argument: $karg"
+		bc_run rpm-ostree kargs --delete-if-present="$karg" || continue
+		reboot_mark_required
+	done < <(rpm-ostree kargs 2>/dev/null | tr ' ' '\n')
+}
+
 # ------------------------------------------------------------------ copr ---
 
 # copr_enable <owner> <project>

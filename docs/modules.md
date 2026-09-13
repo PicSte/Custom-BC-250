@@ -39,9 +39,20 @@ si la commande échoue ou est interrompue. Les modules concernés le déclarent 
 
 ## `10-kargs` — arguments noyau
 
-`ttm.pages_limit=3959290` et `ttm.page_pool_size=3959290` relèvent le plafond
-d'allocation TTM. Sans eux, les grosses allocations GPU échouent bien en dessous des
-16 Go installés.
+`ttm.pages_limit` et `ttm.page_pool_size` relèvent le plafond d'allocation TTM, et
+`amdgpu.gttsize=14750` donne effectivement au GPU l'accès à ~14,5 Go de mémoire
+système. Sans eux, les grosses allocations GPU échouent bien en dessous des 16 Go
+installés.
+
+La valeur est réglable (`BC250_TTM_PAGES_LIMIT`) parce qu'elle dépend du split VRAM :
+3959290 par défaut, 3014656 convient mieux à un split de 512 Mo.
+
+`amdgpu.sg_display=0` n'est posé **que** sur un noyau antérieur à 6.10 : l'option a
+disparu en amont depuis, et la poser sur un noyau récent ne fait que polluer la ligne
+de commande. Le module compare la version au démarrage.
+
+`zswap.enabled=1 zswap.compressor=lz4 zswap.zpool=zsmalloc` accompagnent la
+désactivation de ZRAM (voir `70-fixes`).
 
 `mitigations=off` échange les protections contre les canaux auxiliaires du CPU contre
 des performances. C'est un choix, pas un réglage évident : il reste optionnel par profil
@@ -69,8 +80,29 @@ passe au noyau comme initrd précoce :
 ujust regenerate-grub                         (grub2-mkconfig en repli)
 ```
 
-`verify` lit `cpupower -c all idle-info` : le moindre CPU annonçant zéro état d'inactivité
+`verify` lit `cpupower -c all idle-info` : le moindre CPU annonçant zéro état de repos
 signifie que les tables ne sont pas chargées.
+
+**Le governor CPU est ici, et pas ailleurs.** La table de P-states est la moitié du
+correctif dont personne ne parle : une fois chargée, la carte a du `cpufreq` pour la
+première fois, et il faut bien que quelque chose choisisse un governor — sinon le
+défaut du noyau s'applique. `BC250_CPU_GOVERNOR` (`schedutil` par défaut,
+`performance` dans le profil `max`, `none` pour ne rien toucher) installe une unité
+qui le repose à chaque démarrage. Sans ces tables il n'y a pas de cpufreq du tout à
+gouverner, d'où le rattachement à ce module.
+
+## `35-radv` — configuration RADV
+
+La carte n'a pas de VRAM dédiée : CPU et GPU partagent le même pool. RADV suppose par
+défaut une carte discrète, et `radv_enable_unified_heap_on_apu` lui dit le contraire —
+ce qui évite que de grosses allocations soient comptées sur un tas qui n'existe pas
+vraiment.
+
+Mesa lit `/usr/share/drirc.d/*.conf` puis `/etc/drirc`. Le premier est en lecture seule
+sur une image ostree, donc `/etc/drirc` est le seul emplacement système possible. Ce
+fichier peut déjà appartenir à quelqu'un d'autre : le module ne l'écrit que s'il est
+absent ou s'il porte notre marqueur, et le dit sinon plutôt que d'écraser une
+configuration qu'il n'a pas créée.
 
 ## `20-sensors` — températures
 
@@ -129,6 +161,11 @@ courbe par défaut de l'amont et la coupe aux plafonds du profil :
 
 Avec `balanced` (1500 MHz / 900 mV) les quatre premiers points sont retenus. Si aucun
 point ne rentre dans les plafonds, c'est une erreur — pas une courbe vide.
+
+**La tension GPU a ses propres limites, bien plus basses que celles du CPU** : 1100 mV
+au-delà desquels il faut lever `BC250_ALLOW_EXTREME_GPU_VOLT`, et 1150 mV qui ne se
+franchissent jamais. Ce sont deux budgets distincts, donc deux verrous indépendants —
+lever celui du CPU ne lève pas celui du GPU.
 
 Le governor trouve le GPU tout seul : il n'y a pas de réglage de périphérique dans sa
 configuration. La détection `card0` / `card1` de `bc250ctl` sert donc à la
@@ -213,6 +250,14 @@ en veille active n'est pas une fonctionnalité, c'est un piège. Le module masqu
 **ZRAM** — le swap compressé est mis en cause dans des plantages de jeux (RDR2, Company
 of Heroes 3). Le nom de l'unité dépend du générateur que l'image embarque, donc le module
 essaie les variantes connues plutôt que d'en supposer une.
+
+Mais **le couper et s'arrêter là échange un plantage contre un autre** : une carte sans
+aucun swap n'est pas mieux lotie. Le remplacement documenté en amont est zswap
+(`BC250_KARGS_ZSWAP=1`, dans `10-kargs`) adossé à un fichier de swap sur disque, avec
+`BC250_SWAPPINESS=180` — swapper tôt coûte peu quand les pages atterrissent d'abord en
+RAM compressée. Le module **ne crée pas** le fichier de swap : c'est une décision sur
+ton disque, pas la nôtre. Il vérifie simplement qu'il reste un espace de swap et le dit
+si ce n'est pas le cas.
 
 L'autre agacement connu — MangoHud et radeontop qui annoncent une utilisation GPU à
 plusieurs centaines de pour cent — n'est pas traité ici : il est corrigé par

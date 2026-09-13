@@ -68,14 +68,15 @@ repassez `--profile`).
 | Module | Risque | Ce qu'il fait |
 |---|---|---|
 | `kargs` | faible | Limites mémoire TTM, `mitigations=off`, `video=DP-1:e` selon le profil |
-| `acpi` | faible | Tables ACPI reconstruites : C-states pour 16 threads, P-states |
+| `acpi` | faible | Tables ACPI reconstruites : C-states 16 threads, P-states, governor CPU |
 | `sensors` | aucun | Pilote `nct6683 force=true`, températures en lecture seule |
 | `fan-control` | moyen | Pilote `nct6687` avec PWM. **Exclusif avec `sensors`** |
 | `governor` | faible | `cyan-skillfish-governor-smu` + sa courbe fréquence/tension |
+| `radv` | aucun | `/etc/drirc` : tas mémoire unifié, adapté à la mémoire partagée |
 | `gpu-cu` | moyen | Déblocage 40 CU et routage des WGP, à chaud via `umr` |
 | `cpu-cores` | élevé | Déblocage des 2 cœurs masqués (6c/12t → 8c/16t). **Exige `acpi`** |
 | `cpu-oc` | élevé | Overclock / undervolt CPU, avec calibration sous charge |
-| `fixes` | faible | `hhd`, veille cassée, ZRAM |
+| `fixes` | faible | `hhd`, veille cassée, ZRAM et swappiness |
 
 Trois relations sont modélisées et vérifiées par l'outil :
 
@@ -104,8 +105,11 @@ changer.
 Ce que l'outil refuse, sans discussion possible :
 
 - Une tension cœur CPU au-dessus de **1275 mV** sans `BC250_ALLOW_EXTREME_VID=1`.
-- Une tension au-dessus de **1325 mV**, jamais, quelle que soit l'option. Au-delà, le
-  SoC est détruit.
+- Une tension cœur CPU au-dessus de **1325 mV**, jamais, quelle que soit l'option.
+  Au-delà, le SoC est détruit.
+- Une tension GPU au-dessus de **1100 mV** sans `BC250_ALLOW_EXTREME_GPU_VOLT=1`, et
+  jamais au-dessus de **1150 mV**. C'est un budget distinct de celui du CPU, avec des
+  limites bien plus basses : les deux verrous sont indépendants.
 - Une montée en fréquence CPU sans plafond de tension : le Vid scale alors sans limite,
   c'est la façon documentée de tuer la carte.
 - Toute écriture de registre si aucune BC-250 n'est détectée (contournable par
@@ -154,8 +158,8 @@ de post-installation) et
 
 ```sh
 ./tests/lint.sh                          # shellcheck + parse des sources Python
-bats tests/                              # 118 tests, le moteur
-xvfb-run -a python3 -m pytest gui/tests/ # 47 tests, l'interface
+bats tests/                              # 162 tests, le moteur
+xvfb-run -a python3 -m pytest gui/tests/ # 55 tests, l'interface
 ```
 
 Les deux suites tournent contre un préfixe bac à sable avec les commandes système

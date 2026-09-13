@@ -19,6 +19,8 @@ ACPI_CPIO_NAME='SSDT_ACPI.cpio'
 # The path is relative to GRUB's view of /boot, not to the filesystem root.
 ACPI_GRUB_VALUE='../../SSDT_ACPI.cpio'
 ACPI_GRUB_KEY='GRUB_EARLY_INITRD_LINUX_CUSTOM'
+CPUFREQ_SERVICE='bc250ctl-cpu-governor.service'
+CPUFREQ_SYSFS='/sys/devices/system/cpu/cpufreq'
 
 _acpi_cpio()      { printf '%s\n' "${BC250_PREFIX}/boot/${ACPI_CPIO_NAME}"; }
 _acpi_grub_conf() { printf '%s\n' "${BC250_PREFIX}/etc/default/grub"; }
@@ -39,14 +41,17 @@ _acpi_grub_set() {
 }
 
 # Active when the tables are installed, whatever the profile asks for.
-mod_active() { [[ -f $(_acpi_cpio) ]] && _acpi_grub_set; }
+mod_active() {
+	{ [[ -f $(_acpi_cpio) ]] && _acpi_grub_set; } || unit_exists "$CPUFREQ_SERVICE"
+}
 
 mod_detect() {
-	if [[ ${BC250_ACPI:-1} == 1 ]]; then
-		mod_active
-	else
+	if [[ ${BC250_ACPI:-1} != 1 ]]; then
 		! mod_active
+		return
 	fi
+	[[ -f $(_acpi_cpio) ]] && _acpi_grub_set || return 1
+	[[ ${BC250_CPU_GOVERNOR:-schedutil} == none ]] || unit_exists "$CPUFREQ_SERVICE"
 }
 
 mod_status() {
@@ -106,8 +111,11 @@ mod_install() {
 mod_configure() {
 	[[ ${BC250_ACPI:-1} == 1 ]] || return 0
 
+	# The GRUB entry is written once; the governor is re-applied on every
+	# configure, because that is the part the profile can change.
 	if _acpi_grub_set; then
 		log_debug "GRUB already loads the early ACPI archive"
+		_cpu_governor_configure
 		return 0
 	fi
 
@@ -122,7 +130,63 @@ mod_configure() {
 
 	_acpi_regenerate_grub
 	reboot_mark_required
+	_cpu_governor_configure
 }
+
+# The P-state table is the half of this fix nothing else uses: once it is
+# loaded the CPU has cpufreq for the first time, and something has to pick a
+# scaling governor or the kernel default stands. The setting is here rather
+# than in a module of its own because without these tables there is no
+# cpufreq at all to govern.
+_cpu_governor_configure() {
+	local wanted=${BC250_CPU_GOVERNOR:-schedutil}
+
+	if [[ $wanted == none ]]; then
+		log_info "governor CPU laissé au système"
+		unit_remove "$CPUFREQ_SERVICE"
+		return 0
+	fi
+
+	write_file "$(_cpu_governor_script)" 0755 <<-'EOC'
+		#!/usr/bin/env bash
+		# Written by bc250ctl. Sets the CPU scaling governor given as $1.
+		set -euo pipefail
+
+		governor=${1:?usage: bc250ctl-cpu-governor <name>}
+
+		available=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors 2>/dev/null) || {
+			echo "no cpufreq on this system; are the ACPI P-state tables loaded?" >&2
+			exit 1
+		}
+		case " $available " in
+			*" $governor "*) ;;
+			*) echo "governor '$governor' not available (have: $available)" >&2; exit 1 ;;
+		esac
+
+		for cpu in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do
+			[[ -w $cpu ]] && echo "$governor" >"$cpu"
+		done
+	EOC
+
+	unit_install "$CPUFREQ_SERVICE" <<-EOC
+		[Unit]
+		Description=BC-250 CPU scaling governor
+		After=multi-user.target
+		ConditionPathExists=${CPUFREQ_SYSFS}
+
+		[Service]
+		Type=oneshot
+		RemainAfterExit=yes
+		ExecStart=$(_cpu_governor_script) ${wanted}
+
+		[Install]
+		WantedBy=multi-user.target
+	EOC
+
+	unit_enable_now "$CPUFREQ_SERVICE"
+}
+
+_cpu_governor_script() { printf '%s\n' "${LOCAL_BIN}/bc250ctl-cpu-governor"; }
 
 # Bazzite wraps grub2-mkconfig in a ujust recipe; fall back to the tool itself
 # on an image that does not ship it.
@@ -167,9 +231,34 @@ mod_verify() {
 	if cpupower frequency-info 2>/dev/null | grep -q 'steps\|available frequency'; then
 		log_ok "P-states are exposed"
 	fi
+
+	_cpu_governor_verify
+}
+
+_cpu_governor_verify() {
+	local wanted=${BC250_CPU_GOVERNOR:-schedutil}
+	[[ $wanted == none ]] && { log_ok "governor CPU laissé au système"; return 0; }
+
+	if ! unit_exists "$CPUFREQ_SERVICE"; then
+		log_error "$CPUFREQ_SERVICE est absent : le governor CPU ne sera pas reposé au démarrage"
+		return 1
+	fi
+	log_ok "$CPUFREQ_SERVICE présent ($(unit_status_line "$CPUFREQ_SERVICE"))"
+
+	local current="${BC250_PREFIX}/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+	if [[ -r $current ]]; then
+		if [[ $(<"$current") == "$wanted" ]]; then
+			log_ok "governor CPU actif : $wanted"
+		else
+			log_warn "governor CPU actuellement « $(<"$current") », attendu « $wanted »" \
+			         "— un redémarrage peut être nécessaire"
+		fi
+	fi
 }
 
 mod_uninstall() {
+	unit_remove "$CPUFREQ_SERVICE"
+	[[ -f $(_cpu_governor_script) ]] && bc_run rm -f -- "$(_cpu_governor_script)"
 	[[ -f $(_acpi_cpio) ]] && bc_run rm -f -- "$(_acpi_cpio)"
 
 	if _acpi_grub_set && [[ ${BC250_DRY_RUN:-0} != 1 ]]; then

@@ -32,6 +32,7 @@ STYLE = """
 .badge-risk-high   { background: alpha(@error_color, .18); color: @error_color; }
 .console { font-family: monospace; font-size: 0.9em; }
 .reading-value { font-size: 1.6em; font-weight: bold; }
+.reading-hot   { color: @error_color; }
 """
 
 

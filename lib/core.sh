@@ -55,6 +55,12 @@ config_load() {
 	: "${BC250_FAN_CONTROL:=0}"
 	: "${BC250_FAN_PWM:=auto}"
 	: "${BC250_ALLOW_EXTREME_VID:=0}"
+	: "${BC250_ALLOW_EXTREME_GPU_VOLT:=0}"
+	: "${BC250_CPU_GOVERNOR:=schedutil}"
+	: "${BC250_TTM_PAGES_LIMIT:=3959290}"
+	: "${BC250_KARGS_ZSWAP:=0}"
+	: "${BC250_SWAPPINESS:=auto}"
+	: "${BC250_RADV_UNIFIED_HEAP:=1}"
 }
 
 # config_validate
@@ -74,9 +80,10 @@ config_validate() {
 		settings_check_type "$key" "${!key}"
 	done
 
-	# 2. The CPU voltage ceilings, before the generic range check, so they can
-	#    say what they actually mean rather than "out of range".
+	# 2. The voltage ceilings, before the generic range check, so they can say
+	#    what they actually mean rather than "out of range".
 	_validate_cpu_oc
+	_validate_gpu_voltage
 
 	# 3. Is every value inside its range?
 	for key in $(settings_keys); do
@@ -104,6 +111,28 @@ config_validate() {
 	fi
 }
 
+# The GPU runs on a much smaller voltage budget than the CPU: past 1100 mV it
+# is out of the range anyone has validated, and 1150 mV is where the
+# documentation stops. Same shape as the CPU rule, different numbers.
+_validate_gpu_voltage() {
+	local ceiling=$GPU_VOLT_SAFE_MAX
+	[[ ${BC250_ALLOW_EXTREME_GPU_VOLT:-0} == 1 ]] && ceiling=$GPU_VOLT_ABSOLUTE_MAX
+
+	local key
+	for key in BC250_GOV_VOLT_MIN BC250_GOV_VOLT_MAX; do
+		[[ ${!key} =~ ^[0-9]+$ ]] || continue
+		(( ${!key} <= ceiling )) && continue
+
+		if [[ ${BC250_ALLOW_EXTREME_GPU_VOLT:-0} == 1 ]]; then
+			die "$key ${!key} mV exceeds the ${GPU_VOLT_ABSOLUTE_MAX} mV absolute" \
+			    "maximum for GPU voltage. This is not overridable."
+		fi
+		die "$key ${!key} mV is above the ${GPU_VOLT_SAFE_MAX} mV ceiling this tool" \
+		    "enforces for GPU voltage. Set BC250_ALLOW_EXTREME_GPU_VOLT=1 to go up to" \
+		    "${GPU_VOLT_ABSOLUTE_MAX} mV, and no further."
+	done
+}
+
 _validate_cpu_oc() {
 	# The overclock is off entirely when both knobs are zero.
 	(( BC250_CPU_OC_FREQ == 0 && BC250_CPU_OC_VID == 0 )) && return 0
@@ -127,6 +156,17 @@ _validate_cpu_oc() {
 			    "and understand that ${VID_ABSOLUTE_MAX} mV destroys the SoC."
 		log_warn "running above ${VID_SAFE_MAX} mV (${BC250_CPU_OC_VID} mV) — watch your temperatures"
 	fi
+}
+
+# _version_lt <a> <b> — true when version a sorts before b.
+_version_lt() { [[ $1 != "$2" ]] && [[ $(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1) == "$1" ]]; }
+
+# _version_in_range <v> <lo> <hi> — inclusive.
+_version_in_range() {
+	local v=$1 lo=$2 hi=$3
+	_version_lt "$v" "$lo" && return 1
+	_version_lt "$hi" "$v" && return 1
+	return 0
 }
 
 # --------------------------------------------------------------- modules ---

@@ -217,6 +217,28 @@ class Setting:
         )
 
 
+#: Settings the engine caps below their schema maximum until a flag is set.
+#: The interface must not offer a value the engine will refuse, so each entry
+#: names the flag that lifts the cap and the two limits it moves between.
+CAPPED_SETTINGS = {
+    "BC250_CPU_OC_VID": (
+        "BC250_ALLOW_EXTREME_VID", "vid_safe_max", "vid_absolute_max",
+    ),
+    "BC250_GOV_VOLT_MIN": (
+        "BC250_ALLOW_EXTREME_GPU_VOLT", "gpu_volt_safe_max", "gpu_volt_absolute_max",
+    ),
+    "BC250_GOV_VOLT_MAX": (
+        "BC250_ALLOW_EXTREME_GPU_VOLT", "gpu_volt_safe_max", "gpu_volt_absolute_max",
+    ),
+}
+
+
+def lock_key(setting: "Setting") -> str | None:
+    """The flag that lifts this setting's ceiling, if it has one."""
+    entry = CAPPED_SETTINGS.get(setting.key)
+    return entry[0] if entry else None
+
+
 @dataclass
 class Settings:
     schema: list[Setting] = field(default_factory=list)
@@ -252,15 +274,17 @@ class Settings:
     def effective_maximum(self, setting: Setting, unlocked: bool = False) -> int | None:
         """The highest value the interface should offer.
 
-        The CPU voltage is the reason this exists: the engine refuses anything
-        above the safe ceiling unless the override is set, so a slider that
-        goes higher would be offering something that will be rejected.
+        Voltages are the reason this exists — CPU core voltage and GPU
+        voltage both have a ceiling the engine refuses to cross unless an
+        override is set, so a slider that went higher would be offering
+        something that will be rejected.
         """
-        if setting.key != "BC250_CPU_OC_VID":
+        entry = CAPPED_SETTINGS.get(setting.key)
+        if entry is None:
             return setting.maximum
-        if unlocked:
-            return self.limits.get("vid_absolute_max", setting.maximum)
-        return self.limits.get("vid_safe_max", setting.maximum)
+        _flag, safe, absolute = entry
+        limit = absolute if unlocked else safe
+        return self.limits.get(limit, setting.maximum)
 
     def changes(self, edited: dict[str, str]) -> list[str]:
         """KEY=VALUE for what actually differs, in schema order."""
