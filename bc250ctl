@@ -14,7 +14,7 @@ BC250_ROOT=$(dirname -- "$BC250_SELF")
 : "${BC250_PROFILES_DIR:=$BC250_ROOT/profiles}"
 : "${BC250_SOURCES_FILE:=$BC250_ROOT/sources.env}"
 
-for _lib in log core state systemd ostree download hw smu livemgr; do
+for _lib in log json settings core state systemd ostree download hw telemetry smu livemgr; do
 	# shellcheck source=/dev/null
 	source "$BC250_LIB_DIR/$_lib.sh"
 done
@@ -41,6 +41,11 @@ Usage:
   bc250ctl doctor                       Hardware and environment report
   bc250ctl sources [--check]            Show pinned upstreams, or check for updates
   bc250ctl catalog [--json]             The module graph, for tooling and the GUI
+  bc250ctl config [--json]              Effective settings and their schema
+  bc250ctl config diff KEY=VALUE...     What changing those settings would do
+  bc250ctl config set KEY=VALUE...      Change settings, validated as a whole
+  bc250ctl profiles [--json]            The available profiles
+  bc250ctl telemetry [--json]           Live temperatures, clocks and fans
   bc250ctl menu                         Interactive menu
 
 Options:
@@ -49,6 +54,7 @@ Options:
   -y, --yes            Do not ask for confirmation
   -v, --verbose        More detail
       --force          Continue even if no BC-250 is detected
+      --events         Also emit machine-readable progress lines (for the GUI)
   -h, --help           This text
 
 Modules may be named in full (40-gpu-cu) or short (gpu-cu).
@@ -168,11 +174,13 @@ cmd_install() {
 	local id
 	for id in "${targets[@]}"; do
 		log_step "$(module_short "$id"): $(module_call "$id" describe)"
+		event module-begin "$id" "$(module_call "$id" describe)"
 		module_check_requires "$id"
 		module_check_conflicts "$id"
 		module_call "$id" install
 		module_invalidate "$id"
 		state_set "applied.$id" "$(date -Is)"
+		event module-end "$id" ok
 	done
 }
 
@@ -196,7 +204,14 @@ cmd_verify() {
 	local id rc=0
 	for id in "${targets[@]}"; do
 		log_step "$(module_short "$id")"
-		module_call "$id" verify || { rc=1; log_error "$(module_short "$id") did not verify"; }
+		event module-begin "$id" verify
+		if module_call "$id" verify; then
+			event module-end "$id" ok
+		else
+			rc=1
+			log_error "$(module_short "$id") did not verify"
+			event module-end "$id" failed
+		fi
 	done
 	if (( rc == 0 )); then
 		log_ok "everything checked out"
@@ -267,11 +282,13 @@ _run_stage() {
 		fi
 
 		log_step "$(module_short "$id"): $(module_call "$id" describe)"
+		event module-begin "$id" "$(module_call "$id" describe)"
 		module_check_requires "$id"
 		module_check_conflicts "$id"
 		module_call "$id" install
 		module_invalidate "$id"
 		state_set "applied.$id" "$(date -Is)"
+		event module-end "$id" ok
 	done
 }
 
@@ -334,6 +351,7 @@ cmd_bootstrap() {
 	_run_stage 'runtime' "${BC250_UNATTENDED:-0}"
 
 	if reboot_is_required; then
+		event reboot-required '' 'a reboot is needed to continue'
 		_bootstrap_pause_for_reboot
 		return 0
 	fi
@@ -495,34 +513,6 @@ cmd_sources() {
 
 # --------------------------------------------------------------- catalog ----
 
-# JSON built by hand rather than through jq: the strings are ours, and adding
-# a runtime dependency for one command is not worth it.
-
-_json_str() {
-	local v=$1
-	v=${v//\\/\\\\}
-	v=${v//\"/\\\"}
-	v=${v//$'\r'/}
-	v=${v//$'\t'/\\t}
-	v=${v//$'\n'/\\n}
-	printf '"%s"' "$v"
-}
-
-_json_bool() { if "$@" >/dev/null 2>&1; then printf 'true'; else printf 'false'; fi; }
-
-# _json_list — newline-separated stdin to a JSON array of strings.
-_json_list() {
-	local first=1 line
-	printf '['
-	while IFS= read -r line; do
-		[[ -n $line ]] || continue
-		(( first )) || printf ','
-		first=0
-		_json_str "$line"
-	done
-	printf ']'
-}
-
 cmd_catalog() {
 	if [[ ${1:-} != --json && -n ${1:-} ]]; then
 		die "catalog takes --json or nothing"
@@ -532,11 +522,11 @@ cmd_catalog() {
 
 	printf '{\n'
 	printf '  "version": 1,\n'
-	printf '  "profile": %s,\n' "$(_json_str "$BC250_PROFILE")"
-	printf '  "reboot_required": %s,\n' "$(_json_bool reboot_is_required)"
+	printf '  "profile": %s,\n' "$(json_str "$BC250_PROFILE")"
+	printf '  "reboot_required": %s,\n' "$(json_bool reboot_is_required)"
 	printf '  "hardware": {"bc250": %s, "gpu_card": %s, "cpu_cores": %s},\n' \
-		"$(_json_bool hw_is_bc250)" \
-		"$(_json_str "$(hw_gpu_card 2>/dev/null || echo '')")" \
+		"$(json_bool hw_is_bc250)" \
+		"$(json_str "$(hw_gpu_card 2>/dev/null || echo '')")" \
 		"$(hw_cpu_cores)"
 	printf '  "modules": [\n'
 
@@ -546,25 +536,252 @@ cmd_catalog() {
 		upstream=$(module_call "$id" upstream 2>/dev/null || true)
 
 		printf '    {'
-		printf '"id": %s, '            "$(_json_str "$id")"
-		printf '"name": %s, '          "$(_json_str "$(module_short "$id")")"
-		printf '"description": %s, '   "$(_json_str "$(module_call "$id" describe)")"
-		printf '"stage": %s, '         "$(_json_str "$(module_call "$id" stage)")"
-		printf '"risk": %s, '          "$(_json_str "$(module_call "$id" risk)")"
-		printf '"upstream": %s, '      "$(_json_str "$upstream")"
-		printf '"requires": %s, '      "$(module_call "$id" requires | _json_list)"
-		printf '"conflicts": %s, '     "$(module_call "$id" conflicts | _json_list)"
-		printf '"invalidates": %s, '   "$(module_call "$id" invalidates | _json_list)"
-		printf '"needs_smu": %s, '     "$(_json_bool module_call "$id" needs_smu)"
-		printf '"unattended": %s, '    "$(_json_bool module_call "$id" unattended)"
-		printf '"active": %s, '        "$(_json_bool module_call "$id" active)"
-		printf '"matches_config": %s, ' "$(_json_bool module_call "$id" detect)"
+		printf '"id": %s, '            "$(json_str "$id")"
+		printf '"name": %s, '          "$(json_str "$(module_short "$id")")"
+		printf '"description": %s, '   "$(json_str "$(module_call "$id" describe)")"
+		printf '"stage": %s, '         "$(json_str "$(module_call "$id" stage)")"
+		printf '"risk": %s, '          "$(json_str "$(module_call "$id" risk)")"
+		printf '"upstream": %s, '      "$(json_str "$upstream")"
+		printf '"requires": %s, '      "$(module_call "$id" requires | json_list)"
+		printf '"conflicts": %s, '     "$(module_call "$id" conflicts | json_list)"
+		printf '"invalidates": %s, '   "$(module_call "$id" invalidates | json_list)"
+		printf '"needs_smu": %s, '     "$(json_bool module_call "$id" needs_smu)"
+		printf '"unattended": %s, '    "$(json_bool module_call "$id" unattended)"
+		printf '"active": %s, '        "$(json_bool module_call "$id" active)"
+		printf '"matches_config": %s, ' "$(json_bool module_call "$id" detect)"
 		printf '"stale": %s, '         "$([[ $(state_get "stale.$id" 0) == 1 ]] && printf true || printf false)"
-		printf '"status": %s'          "$(_json_str "$(module_call "$id" status 2>/dev/null || echo '?')")"
+		printf '"status": %s'          "$(json_str "$(module_call "$id" status 2>/dev/null || echo '?')")"
 		printf '}'
 	done
 
 	printf '\n  ]\n}\n'
+}
+
+# ---------------------------------------------------------------- config ----
+
+# _config_file_keys — the keys actually written in the config file, as opposed
+# to the ones that only have a default.
+_config_file_keys() {
+	[[ -f $BC250_CONFIG ]] || return 0
+	sed -n 's/^\(BC250_[A-Z0-9_]*\)=.*/\1/p' -- "$BC250_CONFIG"
+}
+
+cmd_config() {
+	case ${1:-} in
+		''|--json) _config_show ;;
+		diff)      shift; _config_diff "$@" ;;
+		set)       shift; _config_set "$@" ;;
+		*)         die "config takes --json, 'diff KEY=VALUE...' or 'set KEY=VALUE...'" ;;
+	esac
+}
+
+_config_show() {
+	local key first=1 in_file
+	in_file=" $(_config_file_keys | tr '\n' ' ')"
+
+	printf '{\n'
+	printf '  "version": 1,\n'
+	printf '  "path": %s,\n' "$(json_str "$BC250_CONFIG")"
+	printf '  "limits": %s,\n' "$(settings_limits_json)"
+	printf '  "schema": %s,\n' "$(settings_json)"
+	printf '  "values": {\n'
+
+	for key in $(settings_keys); do
+		(( first )) || printf ',\n'
+		first=0
+		printf '    %s: {"value": %s, "source": %s}' \
+			"$(json_str "$key")" \
+			"$(json_str "${!key-}")" \
+			"$(json_str "$([[ $in_file == *" $key "* ]] && printf file || printf default)")"
+	done
+
+	printf '\n  }\n}\n'
+}
+
+# _config_parse_assignments — validates the KEY=VALUE arguments and prints
+# them back one per line. Rejects anything that is not a known setting, so a
+# typo does not silently write a key nothing reads.
+_config_parse_assignments() {
+	local arg key
+	(( $# > 0 )) || die "no KEY=VALUE given"
+	for arg in "$@"; do
+		[[ $arg == *=* ]] || die "expected KEY=VALUE, got '$arg'"
+		key=${arg%%=*}
+		settings_row "$key" >/dev/null ||
+			die "unknown setting '$key' (see 'bc250ctl config --json')"
+		printf '%s\n' "$arg"
+	done
+}
+
+# _assignments_into <array-name> <KEY=VALUE...>
+#
+# _config_parse_assignments runs in a subshell when its output is captured, so
+# its die() has to come back as a failed command substitution. Reading it
+# through a process substitution instead would leave the caller with an empty
+# list and a success status — which once meant a typo silently rewrote the
+# configuration file.
+_assignments_into() {
+	# shellcheck disable=SC2178  # a nameref to the caller's array, not a string
+	local -n _out=$1
+	shift
+	local list
+	list=$(_config_parse_assignments "$@") || return 1
+	[[ -n $list ]] || return 1
+	mapfile -t _out <<<"$list"
+}
+
+# _config_candidate <destination> <assignments...>
+#
+# Writes what the config file would become: the current file with those keys
+# replaced or appended. Does not validate; the callers do.
+_config_candidate() {
+	local dest=$1
+	shift
+	local arg key seen=''
+
+	if [[ -f $BC250_CONFIG ]]; then
+		local line
+		while IFS= read -r line; do
+			local matched=''
+			for arg in "$@"; do
+				key=${arg%%=*}
+				if [[ $line == "$key="* ]]; then
+					matched=$arg
+					seen+=" $key"
+					break
+				fi
+			done
+			printf '%s\n' "${matched:-$line}"
+		done <"$BC250_CONFIG"
+	else
+		printf '# Written by bc250ctl on %s.\n' "$(date -Is)"
+	fi >"$dest"
+
+	for arg in "$@"; do
+		key=${arg%%=*}
+		[[ $seen == *" $key"* ]] || printf '%s\n' "$arg" >>"$dest"
+	done
+}
+
+# _config_validate_candidate <file>
+#
+# Loads the candidate in a subshell and runs the whole validation over it.
+# Checking only the keys being changed would let the cross-field rules through:
+# setting 8 cores is fine on its own and wrong when ACPI is off.
+_config_validate_candidate() {
+	(
+		set -euo pipefail
+		local key
+		for key in $(settings_keys); do unset "$key"; done
+		config_load "$1"
+		config_validate
+	)
+}
+
+_config_diff() {
+	local -a assignments
+	_assignments_into assignments "$@" || return 1
+
+	local arg key value changed=0
+	for arg in "${assignments[@]}"; do
+		key=${arg%%=*}
+		value=${arg#*=}
+		if [[ ${!key-} == "$value" ]]; then
+			printf '  %-28s %s (unchanged)\n' "$key" "$value"
+		else
+			printf '  %-28s %s -> %s\n' "$key" "${!key-}" "$value"
+			changed=1
+		fi
+	done
+
+	(( changed )) || { log_info "nothing would change"; return 0; }
+
+	local candidate
+	candidate=$(mktemp)
+	_config_candidate "$candidate" "${assignments[@]}"
+
+	if _config_validate_candidate "$candidate"; then
+		rm -f -- "$candidate"
+		log_ok "the result would be valid"
+	else
+		rm -f -- "$candidate"
+		log_error "the result would not be valid; nothing would be written"
+		return 1
+	fi
+}
+
+_config_set() {
+	require_root config set "$@"
+
+	local -a assignments
+	_assignments_into assignments "$@" || return 1
+
+	local candidate
+	mkdir -p -- "$(dirname -- "$BC250_CONFIG")"
+	candidate="${BC250_CONFIG}.new.$$"
+	_config_candidate "$candidate" "${assignments[@]}"
+
+	# Validate before the file is in place, so a rejected change leaves the
+	# existing configuration untouched.
+	if ! _config_validate_candidate "$candidate"; then
+		rm -f -- "$candidate"
+		die "the resulting configuration is not valid; nothing was written"
+	fi
+
+	if [[ ${BC250_DRY_RUN:-0} == 1 ]]; then
+		rm -f -- "$candidate"
+		log_info "[dry-run] would write ${#assignments[@]} setting(s) to $BC250_CONFIG"
+		return 0
+	fi
+
+	chmod 0600 -- "$candidate"
+	mv -- "$candidate" "$BC250_CONFIG"
+	log_ok "wrote ${#assignments[@]} setting(s) to $BC250_CONFIG"
+
+	local arg
+	for arg in "${assignments[@]}"; do
+		event config-set "${arg%%=*}" "${arg#*=}"
+	done
+}
+
+# -------------------------------------------------------------- profiles ----
+
+# _profile_description <file> — the comment block at the top of a profile,
+# minus the shellcheck directives, as one line.
+_profile_description() {
+	local line out=''
+	while IFS= read -r line; do
+		[[ $line == '#'* ]] || break
+		[[ $line == '# shellcheck'* ]] && continue
+		line=${line###}
+		line=${line# }
+		[[ -z $line ]] && continue
+		out+="${out:+ }${line}"
+	done <"$1"
+	printf '%s\n' "$out"
+}
+
+cmd_profiles() {
+	[[ ${1:-} == --json || -z ${1:-} ]] || die "profiles takes --json or nothing"
+
+	local file name first=1
+	printf '{\n  "active": %s,\n  "profiles": [\n' "$(json_str "$BC250_PROFILE")"
+	for file in "$BC250_PROFILES_DIR"/*.env; do
+		[[ -f $file ]] || continue
+		name=$(basename "$file" .env)
+		(( first )) || printf ',\n'
+		first=0
+		printf '    {"name": %s, "description": %s}' \
+			"$(json_str "$name")" "$(json_str "$(_profile_description "$file")")"
+	done
+	printf '\n  ]\n}\n'
+}
+
+# ------------------------------------------------------------- telemetry ----
+
+cmd_telemetry() {
+	[[ ${1:-} == --json || -z ${1:-} ]] || die "telemetry takes --json or nothing"
+	telemetry_json
 }
 
 # ----------------------------------------------------------------- menu ----
@@ -625,6 +842,7 @@ main() {
 			-y|--yes)     BC250_ASSUME_YES=1 ;;
 			-v|--verbose) BC250_VERBOSE=1 ;;
 			--force)      BC250_FORCE=1 ;;
+			--events)     BC250_EVENTS=1 ;;
 			-p|--profile) profile=${2:?--profile needs a name}; shift ;;
 			--profile=*)  profile=${1#*=} ;;
 			-h|--help)    usage; return 0 ;;
@@ -635,7 +853,7 @@ main() {
 		shift
 	done
 
-	export BC250_DRY_RUN BC250_ASSUME_YES BC250_VERBOSE BC250_FORCE
+	export BC250_DRY_RUN BC250_ASSUME_YES BC250_VERBOSE BC250_FORCE BC250_EVENTS
 
 	config_load
 
@@ -644,11 +862,14 @@ main() {
 		apply_profile "$profile"
 	fi
 
-	# Validate once, here, rather than in each command. doctor is the
-	# exception: its job is to report problems, not to die on them.
+	# Validate once, here, rather than in each command. The exceptions are the
+	# commands you reach for when the configuration is already wrong: doctor
+	# reports problems rather than dying on them, and `config set` has to be
+	# able to repair a file that does not currently validate — it checks the
+	# result of the change itself.
 	case ${command:-} in
-		''|help|doctor) : ;;
-		*)              config_validate ;;
+		''|help|doctor|config|profiles|telemetry) : ;;
+		*)                                        config_validate ;;
 	esac
 
 	case ${command:-} in
@@ -664,6 +885,9 @@ main() {
 		doctor)     cmd_doctor ;;
 		sources)    cmd_sources "$@" ;;
 		catalog)    cmd_catalog "$@" ;;
+		config)     cmd_config "$@" ;;
+		profiles)   cmd_profiles "$@" ;;
+		telemetry)  cmd_telemetry "$@" ;;
 		menu|tui)   cmd_menu ;;
 		*)          die "unknown command: $command (try --help)" ;;
 	esac

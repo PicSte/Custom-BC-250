@@ -18,17 +18,6 @@ export MODULES_LOAD_DIR="${BC250_PREFIX}/etc/modules-load.d"
 export YUM_REPOS_DIR="${BC250_PREFIX}/etc/yum.repos.d"
 export LOCAL_BIN="${BC250_PREFIX}/usr/local/bin"
 
-# Hard safety ceilings for CPU core voltage, in millivolts.
-#
-# 1325 mV is the absolute limit documented by bc250_smu_oc (bc250_limits.py);
-# above it you damage the SoC. 1275 mV is the ceiling this tool applies on its
-# own, leaving the last 50 mV behind an explicit opt-in.
-readonly VID_ABSOLUTE_MAX=1325
-readonly VID_SAFE_MAX=1275
-readonly VID_MIN=950
-readonly FREQ_MIN=3500
-readonly FREQ_MAX=4500
-
 # ---------------------------------------------------------------- config ---
 
 # config_load [path]
@@ -65,20 +54,7 @@ config_load() {
 	: "${BC250_ACPI:=1}"
 	: "${BC250_FAN_CONTROL:=0}"
 	: "${BC250_FAN_PWM:=auto}"
-}
-
-_is_uint() { [[ $1 =~ ^[0-9]+$ ]]; }
-
-_require_uint() {
-	local name=$1 value=$2
-	_is_uint "$value" || die "$name must be a whole number, got '$value'"
-}
-
-_require_range() {
-	local name=$1 value=$2 lo=$3 hi=$4
-	_require_uint "$name" "$value"
-	(( value >= lo && value <= hi )) ||
-		die "$name must be between $lo and $hi, got $value"
+	: "${BC250_ALLOW_EXTREME_VID:=0}"
 }
 
 # config_validate
@@ -86,12 +62,33 @@ _require_range() {
 # Refuses to continue on any setting that could cook the board. This runs
 # before every action, not just at write time, so hand-edited config files are
 # caught too.
+#
+# Types and ranges come from lib/settings.sh; only the rules that span several
+# settings are written out here, because a table cannot express them.
 config_validate() {
-	_require_uint BC250_CPU_OC_FREQ "$BC250_CPU_OC_FREQ"
-	_require_uint BC250_CPU_OC_VID "$BC250_CPU_OC_VID"
+	local key
 
-	[[ $BC250_CPU_CORES == 6 || $BC250_CPU_CORES == 8 ]] ||
-		die "BC250_CPU_CORES must be 6 or 8, got '$BC250_CPU_CORES'"
+	# 1. Is every value the right shape?
+	for key in $(settings_keys); do
+		[[ -v $key ]] || continue
+		settings_check_type "$key" "${!key}"
+	done
+
+	# 2. The CPU voltage ceilings, before the generic range check, so they can
+	#    say what they actually mean rather than "out of range".
+	_validate_cpu_oc
+
+	# 3. Is every value inside its range?
+	for key in $(settings_keys); do
+		[[ -v $key ]] || continue
+		settings_check_range "$key" "${!key}"
+	done
+
+	# 4. Rules that involve more than one setting.
+	(( BC250_GOV_FREQ_MIN <= BC250_GOV_FREQ_MAX )) ||
+		die "BC250_GOV_FREQ_MIN ($BC250_GOV_FREQ_MIN) exceeds BC250_GOV_FREQ_MAX ($BC250_GOV_FREQ_MAX)"
+	(( BC250_GOV_VOLT_MIN <= BC250_GOV_VOLT_MAX )) ||
+		die "BC250_GOV_VOLT_MIN ($BC250_GOV_VOLT_MIN) exceeds BC250_GOV_VOLT_MAX ($BC250_GOV_VOLT_MAX)"
 
 	# One driver owns the Nuvoton chip. nct6683 reads, nct6687 reads and
 	# writes; loading both leaves neither working properly.
@@ -100,30 +97,16 @@ config_validate() {
 		    "Fan control already provides the temperatures: set BC250_SENSORS=0."
 	fi
 
-	if [[ $BC250_FAN_PWM != auto ]]; then
-		_require_range BC250_FAN_PWM "$BC250_FAN_PWM" 0 255
-	fi
-
 	# The rebuilt SSDT is what gives CPUs 12-15 their idle states.
 	if [[ $BC250_CPU_CORES == 8 && $BC250_ACPI != 1 ]]; then
 		die "BC250_CPU_CORES=8 needs BC250_ACPI=1: without the rebuilt ACPI tables," \
 		    "CPUs 12-15 get no idle states and burn power doing nothing."
 	fi
+}
 
-	_require_range BC250_GOV_FREQ_MIN "$BC250_GOV_FREQ_MIN" 200 2000
-	_require_range BC250_GOV_FREQ_MAX "$BC250_GOV_FREQ_MAX" 200 2000
-	(( BC250_GOV_FREQ_MIN <= BC250_GOV_FREQ_MAX )) ||
-		die "BC250_GOV_FREQ_MIN ($BC250_GOV_FREQ_MIN) exceeds BC250_GOV_FREQ_MAX ($BC250_GOV_FREQ_MAX)"
-
-	_require_range BC250_GOV_VOLT_MIN "$BC250_GOV_VOLT_MIN" 600 1200
-	_require_range BC250_GOV_VOLT_MAX "$BC250_GOV_VOLT_MAX" 600 1200
-	(( BC250_GOV_VOLT_MIN <= BC250_GOV_VOLT_MAX )) ||
-		die "BC250_GOV_VOLT_MIN ($BC250_GOV_VOLT_MIN) exceeds BC250_GOV_VOLT_MAX ($BC250_GOV_VOLT_MAX)"
-
-	# CPU overclock is off entirely when either knob is zero.
-	if (( BC250_CPU_OC_FREQ == 0 && BC250_CPU_OC_VID == 0 )); then
-		return 0
-	fi
+_validate_cpu_oc() {
+	# The overclock is off entirely when both knobs are zero.
+	(( BC250_CPU_OC_FREQ == 0 && BC250_CPU_OC_VID == 0 )) && return 0
 
 	# Raising the frequency without pinning a voltage lets Vid scale without a
 	# ceiling, which is the documented way to destroy the hardware.
@@ -132,12 +115,6 @@ config_validate() {
 		    "raising the CPU frequency without a voltage cap will damage the board"
 	(( BC250_CPU_OC_FREQ > 0 )) ||
 		die "BC250_CPU_OC_VID is set but BC250_CPU_OC_FREQ is 0"
-
-	_require_range BC250_CPU_OC_FREQ "$BC250_CPU_OC_FREQ" "$FREQ_MIN" "$FREQ_MAX"
-	_require_range BC250_CPU_OC_TEMP "$BC250_CPU_OC_TEMP" 60 100
-
-	(( BC250_CPU_OC_VID >= VID_MIN )) ||
-		die "BC250_CPU_OC_VID must be at least ${VID_MIN} mV, got ${BC250_CPU_OC_VID}"
 
 	(( BC250_CPU_OC_VID <= VID_ABSOLUTE_MAX )) ||
 		die "BC250_CPU_OC_VID ${BC250_CPU_OC_VID} mV exceeds the hardware limit of" \

@@ -20,7 +20,7 @@ fi
 log_info()  { printf '%s\n' "$*" >&2; }
 log_ok()    { printf '%s✔%s %s\n' "$_c_green" "$_c_reset" "$*" >&2; }
 log_warn()  { printf '%s!%s %s\n' "$_c_yellow" "$_c_reset" "$*" >&2; }
-log_error() { printf '%s✘%s %s\n' "$_c_red" "$_c_reset" "$*" >&2; }
+log_error() { printf '%s✘%s %s\n' "$_c_red" "$_c_reset" "$*" >&2; event error '' "$*"; }
 log_step()  { printf '\n%s%s==>%s %s%s\n' "$_c_bold" "$_c_blue" "$_c_reset" "$*" "$_c_reset" >&2; }
 log_debug() { [[ ${BC250_VERBOSE:-0} == 1 ]] && printf '%s  %s%s\n' "$_c_dim" "$*" "$_c_reset" >&2; return 0; }
 
@@ -81,3 +81,17 @@ confirm() {
 
 # ui_title <text> — a heading for the interactive menu.
 ui_title() { printf '\n%s%s%s\n\n' "$_c_bold" "$*" "$_c_reset" >&2; }
+
+# event <type> [module] [text]
+#
+# Machine-readable progress, for the GUI. Silent unless --events was given, so
+# terminal output is byte-for-byte what it was before.
+#
+# These go to stdout while the human-readable log goes to stderr, and they use
+# a prefix a caller can filter on. A separate file descriptor would be
+# cleaner, but pkexec does not pass them through.
+event() {
+	[[ ${BC250_EVENTS:-0} == 1 ]] || return 0
+	printf '@@BC250 {"event": %s, "module": %s, "text": %s}\n' \
+		"$(json_str "$1")" "$(json_str "${2-}")" "$(json_str "${3-}")"
+}

@@ -152,3 +152,20 @@ use_profile() {
 write_config() {
 	install -D -m 0600 /dev/stdin "$BC250_PREFIX/etc/bc250ctl/config.env"
 }
+
+# fake_hwmon <driver> <file> <value> — a sysfs hwmon node the telemetry reads.
+fake_hwmon() {
+	local driver=$1 file=$2 value=$3
+	local base="$BC250_PREFIX/sys/class/hwmon"
+	local dir n=0
+	# Reuse the directory already claimed by this driver, if any.
+	for dir in "$base"/hwmon[0-9]*; do
+		[[ -r $dir/name ]] || continue
+		[[ $(<"$dir/name") == "$driver" ]] && { echo "$value" >"$dir/$file"; return 0; }
+		n=$(( n + 1 ))
+	done
+	dir="$base/hwmon$n"
+	mkdir -p "$dir"
+	echo "$driver" >"$dir/name"
+	echo "$value" >"$dir/$file"
+}
